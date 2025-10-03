@@ -28,6 +28,7 @@
       transition: opacity .6s ease, background-image .6s ease;
       background-color: #000;
     }
+    /* mengikuti style yang Anda minta untuk #player */
     #player {
       width: 100vw;
       height: 100vh;
@@ -36,6 +37,8 @@
       display: block;
       z-index: 1;
     }
+
+    /* overlay pesan */
     #info {
       position: fixed;
       left: 0;
@@ -79,68 +82,88 @@
 </head>
 <body>
   <div id="background"></div>
-  <!-- ✅ tambahkan muted untuk memperbesar kemungkinan autoplay sukses -->
-  <audio id="player" autoplay playsinline muted></audio>
+  <audio id="player" autoplay playsinline></audio>
 
   <div id="info">
     <div id="msg">Memuat...</div>
   </div>
 
+  <!-- HLS.js untuk .m3u8 -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 
   <script>
-    let PROXY_BASE = null; 
+    // -- SESUAIKAN: jika Anda memiliki proxy sendiri, isi BASE_URL dengan alamat proxy (contoh: "https://my-proxy.example.com/proxy?url=")
+    // Jika null, player pakai langsung URL. Jika server streaming memblokir CORS => deploy proxy (lihat petunjuk di akhir).
+    const PROXY_BASE = null; // contoh: "https://my-proxy.herokuapp.com/proxy?url="
+
+    // fallback CORS fetch untuk playlist/station HTML (public CORS proxy). Digunakan hanya untuk mengambil playlist / halaman
     const CORS_FALLBACK = "https://api.allorigins.win/raw?url=";
 
     const audio = document.getElementById('player');
     const bg = document.getElementById('background');
     const msg = document.getElementById('msg');
 
-    function setMessage(html){ msg.innerHTML = html; }
-    function safeLog(...args){ console.log('[RADIO]', ...args); }
+    function setMessage(html){
+      msg.innerHTML = html;
+    }
 
     function showTapToPlay(){
-      setMessage('Autoplay diblokir oleh browser.<br><button id="play-btn">Tap untuk putar</button>');
+      setMessage('Tap Tombol PLAY untuk putar Radio.<br><button id="play-btn">PLAY</button>');
       document.getElementById('play-btn').onclick = () => {
-        audio.play().then(()=>audio.muted=false).catch(e=>console.warn(e));
+        audio.play().catch(e=>console.warn(e));
       };
     }
 
+    function safeLog(...args){ console.log('[RADIO]', ...args); }
+
+    // ambil URL dari hash; mendukung format:
+    //  - #<STREAM_URL>
+    //  - #proxy=<PROXY_BASE>|<STREAM_URL> (jika ingin langsung jalan tanpa edit PROXY_BASE)
     const rawHash = decodeURIComponent(location.hash.substring(1) || '').trim();
     let streamUrl = rawHash;
+    // if format proxy=...,split
     if (rawHash && rawHash.startsWith('proxy=')){
       const idx = rawHash.indexOf('|');
       if (idx > -1){
         const p = rawHash.substring(6, idx);
         const s = rawHash.substring(idx+1);
-        if (p) PROXY_BASE = p;
+        if (p) PROXY_BASE = p; // override if provided
         streamUrl = s;
       }
     }
 
     if (!streamUrl){
-      setMessage('❌ Tidak ada stream URL pada hash.<br>Contoh:<br><code>https://.../radio-player/#https://stream.example.com/stream.mp3</code>');
+      setMessage('❌ Tidak ada stream URL pada hash.<br>Contoh penggunaan:<br><code>https://.../radio-player/#https://stream.example.com/stream.mp3</code>');
       throw new Error('no stream URL');
     }
 
+    // helper: cek ekstensi
     function extOf(u){
-      try{ return (new URL(u)).pathname.split('.').pop().toLowerCase(); }
-      catch(e){ return u.split('.').pop().toLowerCase(); }
+      try{
+        const p = (new URL(u)).pathname;
+        const m = p.split('.').pop().toLowerCase();
+        return m;
+      }catch(e){
+        return u.split('.').pop().toLowerCase();
+      }
     }
 
     async function fetchTextWithFallback(url){
+      // coba fetch langsung dulu (bisa gagal karena CORS)
       try {
         const r = await fetch(url);
         if (r.ok) return await r.text();
         throw new Error('non-ok');
       } catch (err) {
+        // fallback lewat AllOrigins untuk menghindari CORS (hanya untuk small text files seperti .m3u/.pls/html)
         try {
           const r2 = await fetch(CORS_FALLBACK + encodeURIComponent(url));
           if (r2.ok) return await r2.text();
+          throw new Error('allorigins fail');
         } catch (e2) {
-          console.warn('fetchTextWithFallback failed', url, err, e2);
+          console.warn('fetchTextWithFallback failed for', url, err, e2);
+          return null;
         }
-        return null;
       }
     }
 
@@ -148,15 +171,19 @@
       const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
       for (const l of lines){
         if (l.startsWith('#')) continue;
+        // jika relatif, gabungkan dengan base
         if (l.startsWith('http')) return l;
         if (baseUrl){
-          try{ return (new URL(l, baseUrl)).href; }catch(e){}
+          try{
+            return (new URL(l, baseUrl)).href;
+          }catch(e){}
         }
       }
       return null;
     }
 
     function parsePLS(text){
+      // cari File1=...
       const lines = text.split(/\r?\n/);
       for (const l of lines){
         if (/^File\d+=/i.test(l)){
@@ -169,94 +196,122 @@
 
     async function tryResolvePlaylist(url){
       const ext = extOf(url);
-      if (ext === 'm3u8') return url;
+      if (ext === 'm3u8') return url; // handled separately
       if (!(ext === 'm3u' || ext === 'pls' || url.includes('.m3u') || url.includes('.pls'))) return null;
-      setMessage('Mendeteksi playlist...');
+
+      setMessage('Mendeteksi playlist. Mencoba membaca isi playlist...');
       const txt = await fetchTextWithFallback(url);
       if (!txt) return null;
       if (ext === 'pls' || txt.toLowerCase().includes('[playlist]')) {
-        return parsePLS(txt);
+        return parsePLS(txt) || null;
       } else {
-        return parseM3U(txt, url);
+        return parseM3U(txt, url) || null;
       }
     }
 
     async function attemptGetCoverFromSite(url){
       try{
         const origin = (new URL(url)).origin;
-        // cek status-json.xsl (Icecast)
+        const html = await fetchTextWithFallback(origin);
+        if (!html) return null;
+        // cari og:image
+        const m = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
+               || html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i)
+               || html.match(/<link[^>]*rel=["']image_src["'][^>]*href=["']([^"']+)["']/i);
+        if (m) {
+          try{ return (new URL(m[1], origin)).href; } catch(e){ return m[1]; }
+        }
+        // coba status-json.xsl (Icecast)
         const statusJson = await fetchTextWithFallback(origin + '/status-json.xsl');
         if (statusJson){
           try{
             const j = JSON.parse(statusJson);
-            const sources = j.icestats && j.icestats.source 
-              ? (Array.isArray(j.icestats.source) ? j.icestats.source : [j.icestats.source]) 
-              : null;
+            // struktur bervariasi; coba cari source[0].url atau icestats.source.file or .title
+            const sources = j.icestats && j.icestats.source ? (Array.isArray(j.icestats.source) ? j.icestats.source : [j.icestats.source]) : null;
             if (sources && sources.length){
               const s0 = sources[0];
-              if (s0.server_name && s0.server_name.includes('http')) return s0.server_name;
-              if (s0.title && s0.title.includes('http')) return s0.title;
+              if (s0 && s0.server_name && s0.server_name.image) return s0.server_name.image;
             }
           }catch(e){}
-        }
-        // fallback ke og:image
-        const html = await fetchTextWithFallback(origin);
-        if (!html) return null;
-        const m = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
-              || html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i)
-              || html.match(/<link[^>]*rel=["']image_src["'][^>]*href=["']([^"']+)["']/i);
-        if (m) {
-          try{ return (new URL(m[1], origin)).href; } catch(e){ return m[1]; }
         }
       }catch(e){ console.warn('cover fetch err', e); }
       return null;
     }
 
+    // START: resolve stream
     (async ()=>{
       try{
         setMessage('Memproses URL stream...');
         safeLog('raw stream url:', streamUrl);
 
+        // 1) Jika playlist -> resolve
         let resolved = await tryResolvePlaylist(streamUrl);
-        if (resolved) streamUrl = resolved;
+        if (resolved){
+          safeLog('playlist resolved:', resolved);
+          streamUrl = resolved;
+        } else {
+          safeLog('not a playlist or could not resolve; use direct URL');
+        }
 
+        // 2) optional: jika PROXY_BASE ditentukan, pakai proxy
         function buildProxyUrl(u){
           if (!PROXY_BASE) return u;
+          // jika proxy base sudah berupa full query prefix (contoh: https://myproxy.com/proxy?url=)
+          // maka kembalikan PROXY_BASE + encodeURIComponent(u)
           if (PROXY_BASE.endsWith('=')) return PROXY_BASE + encodeURIComponent(u);
+          // if proxy expects url param 'url', ensure it ends with '?url='
           if (PROXY_BASE.indexOf('?') === -1) {
             return PROXY_BASE.replace(/\/$/, '') + '/?url=' + encodeURIComponent(u);
           }
+          // fallback
           return PROXY_BASE + encodeURIComponent(u);
         }
 
+        // 3) jika m3u8
         const ext = extOf(streamUrl);
         if (ext === 'm3u8'){
+          setMessage('Menangani HLS (.m3u8)...');
           if (window.Hls && Hls.isSupported()){
             const hls = new Hls();
             hls.loadSource(buildProxyUrl(streamUrl));
             hls.attachMedia(audio);
             hls.on(Hls.Events.MANIFEST_PARSED, function() {
-              audio.play().then(()=>audio.muted=false).catch(()=>showTapToPlay());
+              audio.play().catch(e=> {
+                console.warn('autoplay blocked', e);
+                showTapToPlay();
+              });
+            });
+            hls.on(Hls.Events.ERROR, function(event, data){
+              console.error('HLS error', data);
+              setMessage('Gagal memutar HLS: '+ (data && data.type ? data.type : 'unknown') +'. Coba pakai proxy atau periksa URL.');
             });
           } else if (audio.canPlayType('application/vnd.apple.mpegurl')){
             audio.src = buildProxyUrl(streamUrl);
-            audio.play().then(()=>audio.muted=false).catch(()=>showTapToPlay());
+            audio.play().catch(e=>{ showTapToPlay(); });
           } else {
-            setMessage('Browser tidak mendukung HLS.');
+            setMessage('Browser tidak mendukung HLS. Gunakan browser yang mendukung atau pakai proxy backend.');
           }
         } else {
+          // normal audio (mp3/aac/ogg)
+          setMessage('Mempersiapkan pemutaran audio...');
           const finalUrl = buildProxyUrl(streamUrl);
           audio.src = finalUrl;
           audio.controls = false;
           audio.autoplay = true;
           audio.load();
+
+          // coba play
           audio.play().then(()=>{
-            audio.muted = false;
             setMessage('Sedang memutar...');
             setTimeout(()=>{ document.getElementById('info').style.display='none'; }, 600);
-          }).catch(()=>showTapToPlay());
+          }).catch(err=>{
+            console.warn('play() error', err);
+            // autoplay kemungkinan diblokir -> tampilkan tap to play
+            showTapToPlay();
+          });
         }
 
+        // coba ambil cover dari halaman station (fallback via allorigins)
         const cover = await attemptGetCoverFromSite(streamUrl);
         if (cover){
           bg.style.backgroundImage = `url("${cover}")`;
@@ -267,16 +322,39 @@
           safeLog('no cover found');
         }
 
+        // event handler: error
         audio.addEventListener('error', (e)=>{
-          console.error('Audio error', audio.error);
-          setMessage('❌ Gagal memutar stream. Server mungkin blokir CORS atau format tidak didukung.');
+          console.error('Audio element error', e, audio.error);
+          setMessage('❌ Gagal memutar stream. Alasan umum: server blokir CORS atau format tidak didukung oleh browser.<br>' +
+            '<small>Anda bisa pakai proxy (petunjuk di bawah) untuk mengatasi server yang memblokir.</small>' +
+            '<br><a class="small" href="#help">Cara pasang proxy & solusi → lihat di bawah</a>');
+        });
+
+        audio.addEventListener('playing', ()=> {
+          safeLog('playing');
+          document.getElementById('info').style.display='none';
         });
 
       }catch(err){
         console.error(err);
-        setMessage('Terjadi kesalahan: ' + err.message);
+        setMessage('Terjadi kesalahan saat memproses stream: ' + (err && err.message ? err.message : 'unknown'));
       }
     })();
   </script>
+
+  <!-- Petunjuk singkat (tampilkan di bawah jika pengguna scroll ke #help) -->
+  <div style="position:fixed;bottom:8px;left:8px;z-index:4;color:#fff;font-family:system-ui;padding:6px 8px;background:rgba(0,0,0,0.45);border-radius:6px;">
+    
+  </div>
+
+  <!-- README singkat (taruh di halaman repo Anda) -->
+  <!--
+    Jika banyak stream gagal karena server blokir CORS, deploy proxy sederhana (Node/Express) di layanan seperti Railway/Render/Heroku
+    dan set PROXY_BASE di atas ke: https://<YOUR_PROXY>/proxy?url=
+    Contoh penggunaan di URL:
+      https://kanghen10.github.io/radio-player/#https://stream.example.com/stream.mp3
+    atau bila ingin override proxy via hash:
+      https://kanghen10.github.io/radio-player/#proxy=https://your-proxy.example.com/proxy?url=|https://stream.example.com/stream.mp3
+  -->
 </body>
 </html>
