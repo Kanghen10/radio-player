@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Radio Player</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+    #background {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      opacity: 0.2;
+      z-index: 0;
+    }
+    #player {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+      background: #000;
+      display: block;
+      z-index: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="background"></div>
+  <audio id="player" autoplay></audio>
+
+  <script>
+    // Ambil URL stream dari hash (#)
+    const hash = decodeURIComponent(window.location.hash.substring(1)).trim();
+    const player = document.getElementById('player');
+    const background = document.getElementById('background');
+
+    if (!hash) {
+      document.body.innerHTML = '<h1 style="color:white;text-align:center;margin-top:40vh;font-family:sans-serif;">❌ No stream URL provided</h1>';
+    } else {
+      // Jika link .m3u atau .m3u8, coba gunakan sebagai HLS atau playlist biasa
+      if (hash.endsWith('.m3u8')) {
+        if (Hls.isSupported()) {
+          const hls = new Hls();
+          hls.loadSource(hash);
+          hls.attachMedia(player);
+          hls.on(Hls.Events.MANIFEST_PARSED, function() {
+            player.play();
+          });
+        } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
+          player.src = hash;
+          player.play();
+        } else {
+          showError();
+        }
+      } else {
+        // Untuk mp3, aac, ogg, dll
+        player.src = hash;
+        player.play().catch(() => {});
+      }
+
+      // Hilangkan kontrol media
+      player.controls = false;
+      player.setAttribute('playsinline', '');
+      player.setAttribute('autoplay', '');
+
+      // Ambil metadata ICY jika ada, untuk cover art
+      fetch(hash, { method: 'GET', mode: 'cors' })
+        .then(response => {
+          const contentType = response.headers.get('icy-description') || response.headers.get('icy-name');
+          const icyImage = response.headers.get('icy-url');
+          if (icyImage) {
+            background.style.backgroundImage = `url('${icyImage}')`;
+          } else if (contentType) {
+            console.log('Radio station:', contentType);
+          }
+        })
+        .catch(err => console.log('Metadata fetch skipped:', err));
+    }
+
+    function showError() {
+      document.body.innerHTML = '<h1 style="color:white;text-align:center;margin-top:40vh;font-family:sans-serif;">⚠️ Stream format not supported</h1>';
+    }
+  </script>
+
+  <!-- HLS.js untuk dukungan m3u8 -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</body>
+</html>
