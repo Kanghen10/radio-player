@@ -13,9 +13,7 @@
       color:#fff; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
     }
     #background { position:fixed; inset:0; background:#000; background-size:cover; background-position:center; opacity:0.18; z-index:0; }
-    #cover { max-width:80%; max-height:45%; object-fit:cover; border-radius:10px; margin-bottom:12px; background:#111; display:none; z-index:1; }
-    #metaBox { text-align:center; margin-bottom:12px; z-index:1; background: rgba(0,0,0,0.35); padding:8px 12px; border-radius:8px; max-width:90vw; }
-    #title { font-size:1.1rem; word-wrap:break-word; }
+    #cover { max-width:80%; max-height:45%; object-fit:cover; border-radius:10px; margin-bottom:12px; background:#000; display:none; z-index:1; }
     .controls { display:flex; gap:12px; z-index:2; }
     button { padding:8px 18px; font-size:14px; font-weight:600; border:none; border-radius:6px; cursor:pointer; background:#1a73e8; color:#fff; }
     button.stop { background:#d93025; }
@@ -28,10 +26,6 @@
 
   <div id="background"></div>
   <img id="cover" alt="Cover">
-  <div id="metaBox" style="display:none;">
-    <div id="radioName">Nama radio: -</div>
-    <div id="radioTitle">Judul / Playlist: -</div>
-  </div>
 
   <div class="controls">
     <button id="playBtn">PLAY</button>
@@ -47,26 +41,18 @@
 
   <script>
   (function(){
-    // ---------- Konfigurasi ----------
-    let PROXY_BASE = null; // isi jika pakai proxy: "https://my-proxy.example.com/proxy?url="
+    let PROXY_BASE = null;
     const CORS_FALLBACK = "https://api.allorigins.win/raw?url=";
-    // ----------------------------------
 
-    // Elemen
     const audio = document.getElementById('player');
     const playBtn = document.getElementById('playBtn');
     const stopBtn = document.getElementById('stopBtn');
     const cover = document.getElementById('cover');
-    const metaBox = document.getElementById('metaBox');
-    const radioNameEl = document.getElementById('radioName');
-    const radioTitleEl = document.getElementById('radioTitle');
     const msg = document.getElementById('msg');
     const background = document.getElementById('background');
 
-    // Ambil dari hash
     const rawHash = decodeURIComponent(location.hash.substring(1) || '').trim();
     if (rawHash.startsWith('proxy=')) {
-      // format: proxy=<PROXY_BASE>|<STREAM_URL>
       const idx = rawHash.indexOf('|');
       if (idx > -1) {
         const p = rawHash.substring(6, idx);
@@ -80,22 +66,17 @@
       window._RAW_STREAM = rawHash;
     }
 
-    // state
     let hlsInstance = null;
-    let currentFinalUrl = null; // URL yang dipakai pada audio/hls
-    let isStopped = false;       // true jika user tekan STOP (agar play melakukan reinit)
+    let currentFinalUrl = null;
+    let isStopped = false;
     let lastResolvedPlaylist = null;
 
     function setMsg(t){ msg.innerHTML = t; }
 
-    function safeLog(...a){ console.log('[RADIO]', ...a); }
-
-    // helper ekstensi
     function extOf(u){
       try { return (new URL(u)).pathname.split('.').pop().toLowerCase(); } catch(e){ return u.split('.').pop().toLowerCase(); }
     }
 
-    // fetch text with CORS fallback (untuk .m3u/.pls/halaman)
     async function fetchTextWithFallback(url){
       try {
         const r = await fetch(url);
@@ -105,14 +86,11 @@
         try {
           const r2 = await fetch(CORS_FALLBACK + encodeURIComponent(url));
           if (r2.ok) return await r2.text();
-        } catch (e2) {
-          console.warn('fetchTextWithFallback failed', url, err, e2);
-        }
+        } catch (e2) {}
         return null;
       }
     }
 
-    // parse m3u -> ambil first http line
     function parseM3U(text, baseUrl){
       const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
       for (const l of lines){
@@ -124,7 +102,6 @@
       }
       return null;
     }
-    // parse PLS -> File1=
     function parsePLS(text){
       const lines = text.split(/\r?\n/);
       for (const l of lines){
@@ -137,12 +114,10 @@
     }
 
     async function tryResolvePlaylist(url){
-      // jika ext m3u8 -> return langsung
       const ext = extOf(url || '');
       if (ext === 'm3u8') return url;
       if (!(ext === 'm3u' || ext === 'pls' || (url && (url.includes('.m3u') || url.includes('.pls'))))) return null;
-
-      setMsg('Mendeteksi playlist, membaca isi...');
+      setMsg('Mendeteksi playlist...');
       const txt = await fetchTextWithFallback(url);
       if (!txt) return null;
       if (ext === 'pls' || txt.toLowerCase().includes('[playlist]')) {
@@ -161,11 +136,9 @@
       return PROXY_BASE + encodeURIComponent(u);
     }
 
-    // ambil cover atau metadata dari situs / icecast
-    async function attemptGetCoverAndMeta(streamUrl){
+    async function attemptGetCover(streamUrl){
       try {
         const origin = (new URL(streamUrl)).origin;
-        // coba status-json.xsl
         const sj = await fetchTextWithFallback(origin + '/status-json.xsl');
         if (sj) {
           try {
@@ -174,42 +147,32 @@
               ? (Array.isArray(j.icestats.source) ? j.icestats.source : [j.icestats.source])
               : null;
             if (sources && sources.length){
-              // cari yang cocok dengan streamUrl jika mungkin
               let s0 = sources.find(s => (s.listenurl && s.listenurl === streamUrl) || (s.file && streamUrl.includes(s.file))) || sources[0];
-              // server_name terkadang berisi teks / url
-              const image = (s0 && (s0.image || (s0.server_name && s0.server_name.image))) ? (s0.image || s0.server_name.image) : null;
-              const name = s0 && (s0.server_name || s0.servername || s0.server_name || s0.title || s0.mount || s0.file) || (new URL(streamUrl)).hostname;
-              const title = s0 && (s0.title || s0.song || s0.title) || null;
-              return { image, name, title };
+              const image = s0 && (s0.image || (s0.server_name && s0.server_name.image)) ? (s0.image || s0.server_name.image) : null;
+              if (image) return image;
             }
           } catch(e){}
         }
-
-        // fallback og:image
         const html = await fetchTextWithFallback(origin);
         if (html) {
           const m = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
                 || html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i)
                 || html.match(/<link[^>]*rel=["']image_src["'][^>]*href=["']([^"']+)["']/i);
-          const nameM = html.match(/<title>([^<]+)<\/title>/i);
           if (m) {
-            try { return { image: (new URL(m[1], origin)).href, name: nameM ? nameM[1] : (new URL(streamUrl)).hostname, title: null }; }
-            catch(e) { return { image: m[1], name: nameM ? nameM[1] : (new URL(streamUrl)).hostname, title: null }; }
+            try { return (new URL(m[1], origin)).href; }
+            catch(e) { return m[1]; }
           }
         }
-      } catch(e){ console.warn('attemptGetCoverAndMeta err', e); }
+      } catch(e){}
       return null;
     }
 
-    // cleanup resources (dipanggil pada STOP)
     function cleanupResources(){
       if (hlsInstance) {
-        try { hlsInstance.destroy(); } catch(e){/*ignore*/ }
+        try { hlsInstance.destroy(); } catch(e){ }
         hlsInstance = null;
       }
-      try {
-        audio.pause();
-      } catch(e){}
+      try { audio.pause(); } catch(e){}
       try {
         audio.removeAttribute('src');
         audio.load();
@@ -217,89 +180,57 @@
       currentFinalUrl = null;
     }
 
-    // STOP -> panggil cleanupResources dan flag isStopped
     function stopRadio(){
       isStopped = true;
       cleanupResources();
-      setMsg('Streaming dihentikan. Tekan PLAY untuk mulai ulang.');
-      // tampilkan meta fallback ketika stopped
-      showMetaFallback();
-    }
-
-    // tampilkan meta fallback (tidak ada gambar)
-    function showMetaFallback(name, title){
       cover.style.display = 'none';
-      metaBox.style.display = 'block';
-      radioNameEl.textContent = 'Nama radio: ' + (name || (window._RAW_STREAM ? (new URL(window._RAW_STREAM).hostname) : '-'));
-      radioTitleEl.textContent = 'Judul / Playlist: ' + (title || (lastResolvedPlaylist || 'Sedang diputar'));
+      background.style.backgroundImage = '';
+      setMsg('Streaming dihentikan. Tekan PLAY untuk mulai ulang.');
     }
 
-    // tampilkan cover jika ada
-    function showCover(imgUrl, name, title){
-      if (imgUrl) {
-        cover.src = imgUrl;
-        cover.style.display = 'block';
-        metaBox.style.display = 'none';
-        // set background juga ringan
-        background.style.backgroundImage = `url("${imgUrl}")`;
-      } else {
-        background.style.backgroundImage = '';
-        showMetaFallback(name, title);
-      }
-    }
-
-    // MAIN: inisialisasi & play (re-inits if was stopped)
     async function initAndPlay(){
       if (!window._RAW_STREAM) {
-        setMsg('❌ Tidak ada URL stream pada hash. Tambahkan setelah tanda #');
+        setMsg('❌ Tidak ada URL stream pada hash.');
         return;
       }
       isStopped = false;
-      setMsg('Memproses URL stream...');
-      // resolve playlist jika diperlukan
+      setMsg('Memproses URL...');
       try {
         let resolved = await tryResolvePlaylist(window._RAW_STREAM);
         if (resolved) {
-          safeLog('Playlist resolved =>', resolved);
           lastResolvedPlaylist = resolved;
           currentFinalUrl = resolved;
         } else {
           currentFinalUrl = window._RAW_STREAM;
         }
       } catch(e){
-        console.warn('resolve playlist failed', e);
         currentFinalUrl = window._RAW_STREAM;
       }
 
-      // coba ambil cover/meta (async, tidak blocking)
-      attemptGetCoverAndMeta(currentFinalUrl).then(meta=>{
-        if (meta && (meta.image || meta.name || meta.title)){
-          showCover(meta.image, meta.name, meta.title);
+      // Cover (async)
+      attemptGetCover(currentFinalUrl).then(img=>{
+        if (img){
+          cover.src = img;
+          cover.style.display = 'block';
+          background.style.backgroundImage = `url("${img}")`;
         } else {
-          showMetaFallback();
+          cover.style.display = 'none';
+          background.style.backgroundImage = '';
         }
-      }).catch(e=>{
-        showMetaFallback();
       });
 
-      // set up playback (HLS or normal)
       const ext = extOf(currentFinalUrl || '');
       if (ext === 'm3u8') {
-        setMsg('Menangani HLS (.m3u8)...');
+        setMsg('Menangani HLS...');
         if (window.Hls && Hls.isSupported()){
-          // cleanup first
           if (hlsInstance) { try{ hlsInstance.destroy(); } catch(e){} hlsInstance = null; }
           hlsInstance = new Hls();
-          hlsInstance.on(Hls.Events.ERROR, function(evt, data){ console.error('HLS error', data); });
-          try {
-            hlsInstance.loadSource(buildProxyUrl(currentFinalUrl));
-            hlsInstance.attachMedia(audio);
-            hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
-              audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); }).catch(e=>{ console.warn('play blocked', e); setMsg('Autoplay diblokir, tekan PLAY'); });
-            });
-          } catch(e){
-            setMsg('Gagal inisialisasi HLS. Coba pakai proxy atau periksa URL.');
-          }
+          hlsInstance.on(Hls.Events.ERROR, (evt, data)=>console.error('HLS error', data));
+          hlsInstance.loadSource(buildProxyUrl(currentFinalUrl));
+          hlsInstance.attachMedia(audio);
+          hlsInstance.on(Hls.Events.MANIFEST_PARSED, ()=>{
+            audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); }).catch(e=>{ setMsg('Untuk memutar, tekan PLAY'); });
+          });
         } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
           audio.src = buildProxyUrl(currentFinalUrl);
           audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); }).catch(()=> setMsg('Autoplay diblokir, tekan PLAY'));
@@ -307,23 +238,17 @@
           setMsg('Browser tidak mendukung HLS.');
         }
       } else {
-        // normal audio (mp3, aac, etc.)
         const finalUrl = buildProxyUrl(currentFinalUrl);
-        // jika sebelumnya ada src dan kita men-stop (hapus src), pastikan override
-        try {
-          audio.src = finalUrl;
-          audio.load();
-        } catch(e){ console.warn('set src error', e); }
+        audio.src = finalUrl;
+        audio.load();
         audio.play().then(()=>{
           audio.muted = false;
           setMsg('Sedang memutar...');
         }).catch(err=>{
-          console.warn('play() error', err);
-          setMsg('Autoplay diblokir, tekan PLAY');
+          setMsg('Untuk memutar, tekan PLAY');
         });
       }
 
-      // event handlers
       audio.removeEventListener('error', onAudioError);
       audio.addEventListener('error', onAudioError);
       audio.removeEventListener('playing', onPlaying);
@@ -331,53 +256,42 @@
     }
 
     function onAudioError(e){
-      console.error('Audio error', e, audio.error);
-      setMsg('❌ Gagal memutar. Server mungkin blokir CORS atau stream tidak valid.');
+      setMsg('❌ Gagal memutar stream.');
     }
 
     function onPlaying(){
       setMsg('Sedang memutar...');
     }
 
-    // Tombol
     playBtn.addEventListener('click', async ()=>{
-      // jika sudah stop (isStopped true), inisialisasi ulang
       if (isStopped || !audio.src || !currentFinalUrl) {
         await initAndPlay();
       } else {
-        // jika audio ada src (pause state), coba play
-        audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); }).catch(e=>{ console.warn(e); setMsg('Autoplay diblokir, tekan PLAY lagi'); });
+        audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); }).catch(()=>{ setMsg('Autoplay diblokir, tekan PLAY lagi'); });
       }
     });
 
-    stopBtn.addEventListener('click', ()=>{
-      stopRadio();
-    });
+    stopBtn.addEventListener('click', stopRadio);
 
-    // Autoplay pada load (muted lalu unmute jika diizinkan)
     window.addEventListener('load', ()=>{
       if (window._RAW_STREAM) {
-        initAndPlay().catch(e=>{ console.warn('init fail', e); });
+        initAndPlay().catch(e=>{});
       } else {
         setMsg('Tambahkan stream di hash, contoh: <code>#https://example.com/stream.mp3</code>');
       }
     });
 
-    // Pause saat tab hidden (user pindah tab) — jangan resume otomatis saat visible
     document.addEventListener('visibilitychange', ()=>{
       if (document.visibilityState === 'hidden') {
         try { audio.pause(); setMsg('Paused (tab tidak aktif)'); } catch(e){}
       }
     });
 
-    // Stop total saat close / pagehide
     function stopPlaybackOnExit(){
       cleanupResources();
     }
     window.addEventListener('beforeunload', stopPlaybackOnExit);
     window.addEventListener('pagehide', stopPlaybackOnExit);
-
-    // Safety: ketika user refresh / navigasi away, cleanup juga
     window.addEventListener('unload', stopPlaybackOnExit);
 
   })();
