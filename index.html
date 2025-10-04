@@ -281,9 +281,10 @@
       }
     });
 
+    // ⬇️ Perubahan di sini: dari PAUSE → STOP TOTAL saat tab tidak aktif
     document.addEventListener('visibilitychange', ()=>{
       if (document.visibilityState === 'hidden') {
-        try { audio.pause(); setMsg('Paused (tab tidak aktif)'); } catch(e){}
+        stopRadio();
       }
     });
 
