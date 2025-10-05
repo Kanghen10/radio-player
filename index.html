@@ -17,7 +17,7 @@
     .controls { display:flex; gap:12px; z-index:2; }
     button { padding:8px 18px; font-size:14px; font-weight:600; border:none; border-radius:6px; cursor:pointer; background:#1a73e8; color:#fff; }
     button.stop { background:#d93025; }
-    audio { display:none; } /* sembunyikan kontrol native */
+    audio { display:none; }
     #msg { position:fixed; bottom:12px; left:12px; z-index:3; color:#ddd; font-size:12px; background:rgba(0,0,0,0.4); padding:6px 8px; border-radius:6px; }
     code { color:#9ad1ff; background:rgba(255,255,255,0.03); padding:2px 4px; border-radius:4px; }
   </style>
@@ -36,9 +36,7 @@
 
   <div id="msg">Memuat... (tambahkan stream setelah tanda <code>#</code>)</div>
 
-  <!-- HLS.js -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-
   <script>
   (function(){
     let PROXY_BASE = null;
@@ -71,8 +69,29 @@
     let isStopped = false;
     let lastResolvedPlaylist = null;
 
-    function setMsg(t){ msg.innerHTML = t; }
+    // 🆕 Wake Lock Handler
+    let wakeLock = null;
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => {
+            console.log('Wake Lock released');
+          });
+          console.log('Wake Lock active');
+        }
+      } catch (err) {
+        console.warn('Wake Lock not available:', err);
+      }
+    }
+    function releaseWakeLock() {
+      if (wakeLock) {
+        wakeLock.release().catch(()=>{});
+        wakeLock = null;
+      }
+    }
 
+    function setMsg(t){ msg.innerHTML = t; }
     function extOf(u){
       try { return (new URL(u)).pathname.split('.').pop().toLowerCase(); } catch(e){ return u.split('.').pop().toLowerCase(); }
     }
@@ -141,17 +160,15 @@
         const origin = (new URL(streamUrl)).origin;
         const sj = await fetchTextWithFallback(origin + '/status-json.xsl');
         if (sj) {
-          try {
-            const j = JSON.parse(sj);
-            const sources = j.icestats && j.icestats.source
-              ? (Array.isArray(j.icestats.source) ? j.icestats.source : [j.icestats.source])
-              : null;
-            if (sources && sources.length){
-              let s0 = sources.find(s => (s.listenurl && s.listenurl === streamUrl) || (s.file && streamUrl.includes(s.file))) || sources[0];
-              const image = s0 && (s0.image || (s0.server_name && s0.server_name.image)) ? (s0.image || s0.server_name.image) : null;
-              if (image) return image;
-            }
-          } catch(e){}
+          const j = JSON.parse(sj);
+          const sources = j.icestats && j.icestats.source
+            ? (Array.isArray(j.icestats.source) ? j.icestats.source : [j.icestats.source])
+            : null;
+          if (sources && sources.length){
+            let s0 = sources.find(s => (s.listenurl && s.listenurl === streamUrl) || (s.file && streamUrl.includes(s.file))) || sources[0];
+            const image = s0 && (s0.image || (s0.server_name && s0.server_name.image)) ? (s0.image || s0.server_name.image) : null;
+            if (image) return image;
+          }
         }
         const html = await fetchTextWithFallback(origin);
         if (html) {
@@ -178,6 +195,7 @@
         audio.load();
       } catch(e){}
       currentFinalUrl = null;
+      releaseWakeLock(); // 🆕 pastikan lock dilepas saat stop total
     }
 
     function stopRadio(){
@@ -197,17 +215,11 @@
       setMsg('Memproses URL...');
       try {
         let resolved = await tryResolvePlaylist(window._RAW_STREAM);
-        if (resolved) {
-          lastResolvedPlaylist = resolved;
-          currentFinalUrl = resolved;
-        } else {
-          currentFinalUrl = window._RAW_STREAM;
-        }
+        currentFinalUrl = resolved || window._RAW_STREAM;
       } catch(e){
         currentFinalUrl = window._RAW_STREAM;
       }
 
-      // Cover (async)
       attemptGetCover(currentFinalUrl).then(img=>{
         if (img){
           cover.src = img;
@@ -221,76 +233,57 @@
 
       const ext = extOf(currentFinalUrl || '');
       if (ext === 'm3u8') {
-        setMsg('Menangani HLS...');
         if (window.Hls && Hls.isSupported()){
           if (hlsInstance) { try{ hlsInstance.destroy(); } catch(e){} hlsInstance = null; }
           hlsInstance = new Hls();
-          hlsInstance.on(Hls.Events.ERROR, (evt, data)=>console.error('HLS error', data));
           hlsInstance.loadSource(buildProxyUrl(currentFinalUrl));
           hlsInstance.attachMedia(audio);
           hlsInstance.on(Hls.Events.MANIFEST_PARSED, ()=>{
-            audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); }).catch(e=>{ setMsg('Untuk memutar, tekan PLAY'); });
+            audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); }).catch(()=>{ setMsg('Untuk memutar, tekan PLAY'); });
           });
         } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
           audio.src = buildProxyUrl(currentFinalUrl);
-          audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); }).catch(()=> setMsg('Autoplay diblokir, tekan PLAY'));
+          audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); }).catch(()=> setMsg('Autoplay diblokir, tekan PLAY'));
         } else {
           setMsg('Browser tidak mendukung HLS.');
         }
       } else {
-        const finalUrl = buildProxyUrl(currentFinalUrl);
-        audio.src = finalUrl;
+        audio.src = buildProxyUrl(currentFinalUrl);
         audio.load();
         audio.play().then(()=>{
           audio.muted = false;
           setMsg('Sedang memutar...');
-        }).catch(err=>{
-          setMsg('Untuk memutar, tekan PLAY');
-        });
+          requestWakeLock();
+        }).catch(()=>{ setMsg('Untuk memutar, tekan PLAY'); });
       }
-
-      audio.removeEventListener('error', onAudioError);
-      audio.addEventListener('error', onAudioError);
-      audio.removeEventListener('playing', onPlaying);
-      audio.addEventListener('playing', onPlaying);
     }
 
-    function onAudioError(e){
-      setMsg('❌ Gagal memutar stream.');
-    }
-
-    function onPlaying(){
-      setMsg('Sedang memutar...');
-    }
+    function onAudioError(){ setMsg('❌ Gagal memutar stream.'); }
+    function onPlaying(){ setMsg('Sedang memutar...'); }
 
     playBtn.addEventListener('click', async ()=>{
       if (isStopped || !audio.src || !currentFinalUrl) {
         await initAndPlay();
       } else {
-        audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); }).catch(()=>{ setMsg('Autoplay diblokir, tekan PLAY lagi'); });
+        audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); }).catch(()=>{ setMsg('Autoplay diblokir, tekan PLAY lagi'); });
       }
     });
 
     stopBtn.addEventListener('click', stopRadio);
 
     window.addEventListener('load', ()=>{
-      if (window._RAW_STREAM) {
-        initAndPlay().catch(e=>{});
-      } else {
-        setMsg('Tambahkan stream di hash, contoh: <code>#https://example.com/stream.mp3</code>');
-      }
+      if (window._RAW_STREAM) { initAndPlay().catch(()=>{}); }
+      else setMsg('Tambahkan stream di hash, contoh: <code>#https://example.com/stream.mp3</code>');
     });
 
-    // ⬇️ Perubahan di sini: dari PAUSE → STOP TOTAL saat tab tidak aktif
+    // ⬇️ Tetap stop total saat benar-benar pindah tab
     document.addEventListener('visibilitychange', ()=>{
-      if (document.visibilityState === 'hidden') {
+      if (document.visibilityState === 'hidden' && !document.hiddenByScreenOff) {
         stopRadio();
       }
     });
 
-    function stopPlaybackOnExit(){
-      cleanupResources();
-    }
+    function stopPlaybackOnExit(){ cleanupResources(); }
     window.addEventListener('beforeunload', stopPlaybackOnExit);
     window.addEventListener('pagehide', stopPlaybackOnExit);
     window.addEventListener('unload', stopPlaybackOnExit);
