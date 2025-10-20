@@ -75,8 +75,6 @@
       color: white;
     }
   </style>
-
-  <!-- libs -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
 </head>
@@ -96,12 +94,11 @@
     const audio = document.getElementById('audio');
     const playBtn = document.getElementById('playBtn');
     const stopBtn = document.getElementById('stopBtn');
+    const albumArt = document.getElementById('albumArt');
     const canvas = document.getElementById('visualizer');
     const ctx = canvas.getContext('2d');
     const modeToggle = document.getElementById('modeToggle');
     const statusText = document.getElementById('status');
-
-    const CORS_FALLBACK = "https://api.allorigins.win/raw?url=";
 
     const modes = ['bar', 'wave', 'circle'];
     let modeIndex = 0;
@@ -109,10 +106,8 @@
     let hue = 0;
 
     let audioContext, source, analyser, dataArray, bufferLength, animationId;
-    let hls = null, dashPlayer = null;
-    let hasTriedPlay = false;
+    let hls, dashPlayer;
 
-    function setStatus(t){ statusText.textContent = t; }
     function resizeCanvas() {
       canvas.width = window.innerWidth;
       canvas.height = 200;
@@ -122,25 +117,20 @@
 
     function initAudioContext() {
       if (!audioContext) {
-        try {
-          audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          source = audioContext.createMediaElementSource(audio);
-          analyser = audioContext.createAnalyser();
-          analyser.fftSize = 2048;
-          bufferLength = analyser.frequencyBinCount;
-          dataArray = new Uint8Array(bufferLength);
-          source.connect(analyser);
-          analyser.connect(audioContext.destination);
-        } catch (e) {
-          console.warn('AudioContext init failed', e);
-        }
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        source = audioContext.createMediaElementSource(audio);
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 2048;
+        bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+        source.connect(analyser);
+        analyser.connect(audioContext.destination);
       }
     }
 
     function drawVisualizer() {
       animationId = requestAnimationFrame(drawVisualizer);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (!analyser) return;
 
       if (mode === 'bar') {
         analyser.getByteFrequencyData(dataArray);
@@ -151,7 +141,6 @@
           ctx.fillStyle = 'rgb(' + (barHeight + 100) + ',50,50)';
           ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
           x += barWidth + 1;
-          if (x > canvas.width) break;
         }
       } else if (mode === 'wave') {
         analyser.getByteTimeDomainData(dataArray);
@@ -177,8 +166,8 @@
         ctx.beginPath();
         for (let i = 0; i < bufferLength; i++) {
           const angle = (i / bufferLength) * 2 * Math.PI;
-          const v = (dataArray[i] - 128) / 128.0; // centered
-          const r = radius + v * 60;
+          const v = dataArray[i] / 128.0;
+          const r = radius + v * 30;
           const x = centerX + r * Math.cos(angle);
           const y = centerY + r * Math.sin(angle);
           if (i === 0) ctx.moveTo(x, y);
@@ -192,11 +181,7 @@
         ctx.shadowBlur = 25;
         ctx.shadowColor = color;
         ctx.stroke();
-        // plasma fill
-        const gradient = ctx.createRadialGradient(centerX, centerY, radius*0.2, centerX, centerY, radius + 60);
-        gradient.addColorStop(0, `hsla(${hue},100%,60%,0.45)`);
-        gradient.addColorStop(1, `hsla(${(hue+60)%360},100%,50%,0.05)`);
-        ctx.fillStyle = gradient;
+        ctx.fillStyle = `hsla(${hue}, 100%, 60%, 0.2)`;
         ctx.fill();
         ctx.shadowBlur = 0;
       }
@@ -204,193 +189,32 @@
 
     function stopVisualizer() {
       if (animationId) cancelAnimationFrame(animationId);
-      animationId = null;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
 
-    // --- helper: fetch text with CORS fallback (useful for m3u/pls)
-    async function fetchTextWithFallback(url) {
-      try {
-        const r = await fetch(url);
-        if (r.ok) return await r.text();
-      } catch (e) {
-        // fallback via allorigins
-      }
-      try {
-        const r2 = await fetch(CORS_FALLBACK + encodeURIComponent(url));
-        if (r2.ok) return await r2.text();
-      } catch (e2) {}
-      return null;
-    }
+    audio.addEventListener('loadstart', () => statusText.textContent = "Sedang Loading Radio...");
+    audio.addEventListener('playing', () => { statusText.textContent = "Sedang memutar..."; playBtn.classList.add('playing'); });
+    audio.addEventListener('pause', () => playBtn.classList.remove('playing'));
+    audio.addEventListener('error', () => { statusText.textContent = "Gagal memutar atau Radio sedang Offline"; playBtn.classList.remove('playing'); });
 
-    // parse playlist files (.m3u, .pls)
-    function parseM3U(text, baseUrl) {
-      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-      for (const l of lines) {
-        if (l.startsWith('#')) continue;
-        if (l.startsWith('http')) return l;
-        if (baseUrl) {
-          try { return (new URL(l, baseUrl)).href; } catch(e){}
-        }
-      }
-      return null;
-    }
-    function parsePLS(text) {
-      const lines = text.split(/\r?\n/);
-      for (const l of lines) {
-        if (/^File\d+=/i.test(l)) {
-          const v = l.split('=')[1].trim();
-          if (v) return v;
-        }
-      }
-      return null;
-    }
-    async function tryResolvePlaylist(url) {
-      const lower = (url||'').toLowerCase();
-      if (lower.endsWith('.m3u') || lower.includes('.m3u')) {
-        const txt = await fetchTextWithFallback(url);
-        if (txt) return parseM3U(txt, url);
-      }
-      if (lower.endsWith('.pls') || lower.includes('.pls')) {
-        const txt = await fetchTextWithFallback(url);
-        if (txt) return parsePLS(txt);
-      }
-      return null;
-    }
-
-    // cleanup players
-    function cleanupPlayers() {
-      if (hls) { try{ hls.destroy(); }catch(e){} hls = null; }
-      if (dashPlayer) { try{ dashPlayer.reset(); }catch(e){} dashPlayer = null; }
-    }
-
-    // smart detect and play
-    async function detectStreamTypeAndPlay(url) {
-      cleanupPlayers();
-      hasTriedPlay = true;
-      setStatus('Sedang Loading Radio...');
-      const lower = (url||'').toLowerCase().trim();
-
-      // resolve playlists first (m3u/pls)
-      try {
-        const maybe = await tryResolvePlaylist(url);
-        if (maybe) {
-          url = maybe;
-        }
-      } catch(e){ /* ignore */ }
-
-      // HLS
-      if (lower.endsWith('.m3u8') || url.toLowerCase().includes('.m3u8')) {
-        if (window.Hls && Hls.isSupported()) {
-          hls = new Hls();
-          hls.loadSource(url);
-          hls.attachMedia(audio);
-        } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-          audio.src = url;
-        } else {
-          setStatus('Browser tidak mendukung HLS');
-          return;
-        }
-      }
-      // DASH
-      else if (lower.endsWith('.mpd')) {
-        try {
-          dashPlayer = dashjs.MediaPlayer().create();
-          dashPlayer.initialize(audio, url, false);
-        } catch (e) {
-          console.warn('dash init fail', e);
-          audio.src = url;
-        }
-      }
-      // Shoutcast/Icecast "end with /;" (common) — attempt several fallbacks
-      else if (/\/;(\?.*)?$/.test(url)) {
-        // Try plain url first (some servers serve directly)
-        audio.src = url;
-        // also prepare an alternate form used by some shoutcast servers
-        // if playback fails we'll try adding "type=.mp3" later in error handler
-      }
-      // otherwise direct assign (mp3,aac,ogg,opus, etc.)
-      else {
-        audio.src = url;
-      }
-
-      // Try to play. If autoplay blocked: just show "Tekan tombol Play..." (no error flash)
-      audio.play().then(()=> {
-        initAudioContext();
-        drawVisualizer();
-      }).catch(async (err) => {
-        // autoplay may be blocked — show prompt but keep src ready
-        // If playback failed due to actual stream error, audio 'error' event will fire.
-        setStatus('Tekan tombol Play untuk memutar Radio');
-      });
-    }
-
-    // audio event handlers
-    audio.addEventListener('loadstart', ()=> {
-      // user-visible loading
-      setStatus('Sedang Loading Radio...');
-    });
-    audio.addEventListener('playing', () => {
-      setStatus('Sedang memutar...');
-      playBtn.classList.add('playing');
-    });
-    audio.addEventListener('pause', () => {
-      playBtn.classList.remove('playing');
-    });
-    audio.addEventListener('error', async () => {
-      // Special fallback for Shoutcast /; — try alternative url with type=.mp3 (some servers expect parameter)
-      const src = audio.src || '';
-      if (src && /\/;(\?.*)?$/.test(src) && !src.includes('type=')) {
-        try {
-          // try adding type=.mp3 (some shoutcast implementations accept it)
-          const alt = src.replace(/\/;(\?.*)?$/, '/;type=.mp3');
-          audio.src = alt;
-          audio.load();
-          await audio.play().then(()=> {
-            initAudioContext();
-            drawVisualizer();
-            return;
-          }).catch(()=>{ /* fallback to showing error */ });
-        } catch (e){}
-      }
-      // if still error or no alternative -> show message
-      setTimeout(()=>{ // short delay to avoid racing autoplay-block messages
-        // If user has never tried Play (autoplay blocked), prefer prompt rather than error
-        if (!hasTriedPlay) {
-          setStatus('Tekan tombol Play untuk memutar Radio');
-        } else {
-          setStatus('Gagal memutar atau Radio sedang Offline');
-          playBtn.classList.remove('playing');
-        }
-      }, 250);
-    });
-
-    // play/stop button logic (kept behavior)
     playBtn.addEventListener('click', () => {
       if (audio.src) {
         initAudioContext();
         audio.play().then(() => {
-          audioContext && audioContext.resume && audioContext.resume();
+          audioContext.resume();
           drawVisualizer();
-        }).catch(()=> {
-          setStatus('Gagal memutar atau Radio sedang Offline');
+        }).catch(() => {
+          statusText.textContent = "Tekan tombol Play untuk memutar Radio";
         });
-      } else {
-        // load from hash if no src yet
-        loadStreamFromHash();
       }
     });
 
     stopBtn.addEventListener('click', () => {
-      try { audio.pause(); } catch(e){}
-      try { audio.currentTime = 0; } catch(e){}
+      audio.pause();
+      audio.currentTime = 0;
       stopVisualizer();
-      setStatus('Tekan tombol Play untuk memutar Radio');
+      statusText.textContent = "Tekan tombol Play untuk memutar Radio";
       playBtn.classList.remove('playing');
-      cleanupPlayers();
-      audio.removeAttribute('src');
-      audio.load();
-      hasTriedPlay = false;
     });
 
     modeToggle.addEventListener('click', () => {
@@ -399,47 +223,68 @@
       modeToggle.textContent = 'Mode: ' + mode.charAt(0).toUpperCase() + mode.slice(1);
     });
 
-    // load stream from hash (main entry)
+    function detectStreamTypeAndPlay(url) {
+      // cleanup previous players
+      if (hls) { hls.destroy(); hls = null; }
+      if (dashPlayer) { dashPlayer.reset(); dashPlayer = null; }
+
+      const lower = url.toLowerCase();
+      if (lower.endsWith('.m3u8')) {
+        if (Hls.isSupported()) {
+          hls = new Hls();
+          hls.loadSource(url);
+          hls.attachMedia(audio);
+        } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
+          audio.src = url;
+        } else {
+          statusText.textContent = "Browser tidak mendukung HLS";
+          return;
+        }
+      } else if (lower.endsWith('.mpd')) {
+        dashPlayer = dashjs.MediaPlayer().create();
+        dashPlayer.initialize(audio, url, true);
+      } else {
+        // handle Shoutcast/Icecast style .../;
+        if (url.endsWith('/;')) {
+          audio.src = url + 'type=.mp3';
+        } else {
+          audio.src = url;
+        }
+      }
+
+      audio.play().then(() => {
+        initAudioContext();
+        drawVisualizer();
+      }).catch(() => {
+        statusText.textContent = "Tekan tombol Play untuk memutar Radio";
+      });
+    }
+
     function loadStreamFromHash() {
-      const streamUrl = decodeURIComponent(window.location.hash.substring(1)).trim();
+      const streamUrl = decodeURIComponent(window.location.hash.substring(1));
       if (!streamUrl) {
-        setStatus('Tekan tombol Play untuk memutar Radio');
+        statusText.textContent = "Tekan tombol Play untuk memutar Radio";
         return;
       }
-      // keep original behavior: try to play/resolve stream smartly
       detectStreamTypeAndPlay(streamUrl);
-      // clear album art (we don't fetch art here)
-      document.getElementById('albumArt').style.backgroundImage = '';
+      albumArt.style.backgroundImage = '';
     }
 
     window.addEventListener('hashchange', loadStreamFromHash);
-
-    // Stop totally when leaving tab
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden' && !document.hiddenByScreenOff) {
-        // stop playback fully
-        try { audio.pause(); } catch(e){}
-        try { audio.currentTime = 0; } catch(e){}
+      if (document.hidden) {
+        audio.pause();
         stopVisualizer();
-        setStatus('Tekan tombol Play untuk memutar Radio');
+        statusText.textContent = "Tekan tombol Play untuk memutar Radio";
         playBtn.classList.remove('playing');
-        cleanupPlayers();
-        audio.removeAttribute('src');
-        audio.load();
-        hasTriedPlay = false;
       }
     });
-
     window.addEventListener('beforeunload', () => {
-      try { audio.pause(); } catch(e){}
-      try { audio.currentTime = 0; } catch(e){}
-      cleanupPlayers();
+      audio.pause();
+      audio.currentTime = 0;
     });
 
-    // initial
-    setStatus('Tekan tombol Play untuk memutar Radio');
-    // if hash present, keep ready but don't force-play (keputusan: keep like "old" behavior)
-    // loadStreamFromHash(); // do not auto-start; keep Play button consistent with your earlier working behavior
+    loadStreamFromHash();
   </script>
 </body>
 </html>
