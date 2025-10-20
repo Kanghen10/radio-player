@@ -55,17 +55,10 @@
       box-shadow: 0 0 10px rgba(0, 128, 255, 0.7);
     }
     @keyframes pulseGlow {
-      0% {
-        box-shadow: 0 0 10px rgba(0, 128, 255, 0.7);
-      }
-      50% {
-        box-shadow: 0 0 25px rgba(0, 128, 255, 1);
-      }
-      100% {
-        box-shadow: 0 0 10px rgba(0, 128, 255, 0.7);
-      }
+      0% { box-shadow: 0 0 10px rgba(0, 128, 255, 0.7); }
+      50% { box-shadow: 0 0 25px rgba(0, 128, 255, 1); }
+      100% { box-shadow: 0 0 10px rgba(0, 128, 255, 0.7); }
     }
-
     #stopBtn {
       background: red;
       color: white;
@@ -90,19 +83,16 @@
       color: white;
     }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
 <body>
   <div id="albumArt"></div>
-
   <div id="status">Tekan tombol Play untuk memutar Radio</div>
-
   <canvas id="visualizer"></canvas>
-
   <div id="controls">
     <button id="playBtn">PLAY</button>
     <button id="stopBtn">STOP</button>
   </div>
-
   <button id="modeToggle">Mode: Bar</button>
 
   <audio id="audio" crossorigin="anonymous"></audio>
@@ -123,6 +113,7 @@
     let hue = 0;
 
     let audioContext, source, analyser, dataArray, bufferLength, animationId;
+    let hls;
 
     function resizeCanvas() {
       canvas.width = window.innerWidth;
@@ -179,7 +170,6 @@
         const radius = 80;
         const centerX = canvas.width / 2;
         const centerY = canvas.height / 2;
-
         ctx.beginPath();
         for (let i = 0; i < bufferLength; i++) {
           const angle = (i / bufferLength) * 2 * Math.PI;
@@ -191,7 +181,6 @@
           else ctx.lineTo(x, y);
         }
         ctx.closePath();
-
         hue = (hue + 2) % 360;
         const color = `hsl(${hue}, 100%, 60%)`;
         ctx.strokeStyle = color;
@@ -199,7 +188,6 @@
         ctx.shadowBlur = 25;
         ctx.shadowColor = color;
         ctx.stroke();
-
         ctx.fillStyle = `hsla(${hue}, 100%, 60%, 0.2)`;
         ctx.fill();
         ctx.shadowBlur = 0;
@@ -211,24 +199,10 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
 
-    // 🌀 Loading, error, playing handlers
-    audio.addEventListener('loadstart', () => {
-      statusText.textContent = "Sedang Loading Radio...";
-    });
-
-    audio.addEventListener('playing', () => {
-      statusText.textContent = "Sedang memutar...";
-      playBtn.classList.add('playing');
-    });
-
-    audio.addEventListener('pause', () => {
-      playBtn.classList.remove('playing');
-    });
-
-    audio.addEventListener('error', () => {
-      statusText.textContent = "Gagal memutar atau Radio sedang Offline";
-      playBtn.classList.remove('playing');
-    });
+    audio.addEventListener('loadstart', () => statusText.textContent = "Sedang Loading Radio...");
+    audio.addEventListener('playing', () => { statusText.textContent = "Sedang memutar..."; playBtn.classList.add('playing'); });
+    audio.addEventListener('pause', () => playBtn.classList.remove('playing'));
+    audio.addEventListener('error', () => { statusText.textContent = "Gagal memutar atau Radio sedang Offline"; playBtn.classList.remove('playing'); });
 
     playBtn.addEventListener('click', () => {
       if (audio.src) {
@@ -258,22 +232,43 @@
 
     function loadStreamFromHash() {
       const streamUrl = decodeURIComponent(window.location.hash.substring(1));
-      if (streamUrl) {
-        audio.src = streamUrl;
-        audio.play().then(() => {
-          initAudioContext();
-          drawVisualizer();
-        }).catch(() => {
-          statusText.textContent = "Tekan tombol Play untuk memutar Radio";
-        });
-        albumArt.style.backgroundImage = '';
-      } else {
+      if (!streamUrl) {
         statusText.textContent = "Tekan tombol Play untuk memutar Radio";
+        return;
       }
+
+      // cleanup previous hls instance
+      if (hls) {
+        hls.destroy();
+        hls = null;
+      }
+
+      if (streamUrl.endsWith('.m3u8')) {
+        if (Hls.isSupported()) {
+          hls = new Hls();
+          hls.loadSource(streamUrl);
+          hls.attachMedia(audio);
+        } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
+          audio.src = streamUrl;
+        } else {
+          statusText.textContent = "Browser tidak mendukung HLS";
+          return;
+        }
+      } else {
+        audio.src = streamUrl;
+      }
+
+      audio.play().then(() => {
+        initAudioContext();
+        drawVisualizer();
+      }).catch(() => {
+        statusText.textContent = "Tekan tombol Play untuk memutar Radio";
+      });
+
+      albumArt.style.backgroundImage = '';
     }
 
     window.addEventListener('hashchange', loadStreamFromHash);
-
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         audio.pause();
@@ -282,7 +277,6 @@
         playBtn.classList.remove('playing');
       }
     });
-
     window.addEventListener('beforeunload', () => {
       audio.pause();
       audio.currentTime = 0;
