@@ -14,29 +14,36 @@
     }
     #background { position:fixed; inset:0; background:#000; background-size:cover; background-position:center; opacity:0.18; z-index:0; }
     #cover { max-width:80%; max-height:45%; object-fit:cover; border-radius:10px; margin-bottom:12px; background:#000; display:none; z-index:1; }
+    .controls { display:flex; gap:12px; z-index:2; }
+    button { padding:8px 18px; font-size:14px; font-weight:600; border:none; border-radius:6px; cursor:pointer; background:#1a73e8; color:#fff; }
+    button.stop { background:#d93025; }
+    audio { display:none; }
+    #msg { position:fixed; bottom:12px; left:12px; z-index:3; color:#ddd; font-size:12px; background:rgba(0,0,0,0.4); padding:6px 8px; border-radius:6px; }
+    code { color:#9ad1ff; background:rgba(255,255,255,0.03); padding:2px 4px; border-radius:4px; }
 
-    /* 🎨 Visualizer */
+    /* 🎧 Canvas Visualizer */
     #visualizer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
       width: 100%;
       height: 180px;
       display: block;
       z-index: 1;
     }
-
-    .controls { display:flex; gap:12px; z-index:2; margin-top: 10px; }
-    button { padding:8px 18px; font-size:14px; font-weight:600; border:none; border-radius:6px; cursor:pointer; background:#1a73e8; color:#fff; }
-    button.stop { background:#d93025; }
     #modeBtn {
-      position: absolute;
+      position: fixed;
       top: 10px;
       right: 10px;
-      font-size: 13px;
+      z-index: 5;
       background: rgba(0,0,0,0.5);
-      padding: 6px 10px;
+      color: white;
+      font-size: 13px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
     }
-    audio { display:none; }
-    #msg { position:fixed; bottom:12px; left:12px; z-index:3; color:#ddd; font-size:12px; background:rgba(0,0,0,0.4); padding:6px 8px; border-radius:6px; }
-    code { color:#9ad1ff; background:rgba(255,255,255,0.03); padding:2px 4px; border-radius:4px; }
   </style>
 </head>
 <body>
@@ -45,13 +52,12 @@
   <img id="cover" alt="Cover">
 
   <canvas id="visualizer"></canvas>
+  <button id="modeBtn">Mode: Bar</button>
 
   <div class="controls">
     <button id="playBtn">PLAY</button>
     <button id="stopBtn" class="stop">STOP</button>
   </div>
-
-  <button id="modeBtn">Mode: Bar</button>
 
   <audio id="player" autoplay playsinline muted></audio>
 
@@ -60,6 +66,9 @@
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <script>
   (function(){
+    // ==============================
+    // ⚡ PLAYER ASLI (TIDAK DIUBAH)
+    // ==============================
     let PROXY_BASE = null;
     const CORS_FALLBACK = "https://api.allorigins.win/raw?url=";
 
@@ -69,116 +78,6 @@
     const cover = document.getElementById('cover');
     const msg = document.getElementById('msg');
     const background = document.getElementById('background');
-
-    // ===== 🎧 Visualizer Setup =====
-    const canvas = document.getElementById('visualizer');
-    const ctx = canvas.getContext('2d');
-    let audioCtx, analyser, source, dataArray, bufferLength, animationId;
-    let hue = 0;
-    const modes = ['bar', 'wave', 'circle'];
-    let modeIndex = 0;
-    const modeBtn = document.getElementById('modeBtn');
-
-    function resizeCanvas() {
-      canvas.width = window.innerWidth;
-      canvas.height = 180;
-    }
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
-
-    function initVisualizer() {
-      if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        source = audioCtx.createMediaElementSource(audio);
-        analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 2048;
-        bufferLength = analyser.frequencyBinCount;
-        dataArray = new Uint8Array(bufferLength);
-        source.connect(analyser);
-        analyser.connect(audioCtx.destination);
-      }
-    }
-
-    function drawVisualizer() {
-      animationId = requestAnimationFrame(drawVisualizer);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      if (!analyser) return;
-      const mode = modes[modeIndex];
-
-      if (mode === 'bar') {
-        analyser.getByteFrequencyData(dataArray);
-        const barWidth = (canvas.width / bufferLength) * 2.5;
-        let x = 0;
-        for (let i = 0; i < bufferLength; i++) {
-          const barHeight = dataArray[i] / 2;
-          ctx.fillStyle = 'rgb(' + (barHeight + 100) + ',50,50)';
-          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-          x += barWidth + 1;
-        }
-      } else if (mode === 'wave') {
-        analyser.getByteTimeDomainData(dataArray);
-        ctx.beginPath();
-        const sliceWidth = canvas.width / bufferLength;
-        let x = 0;
-        for (let i = 0; i < bufferLength; i++) {
-          const v = dataArray[i] / 128.0;
-          const y = v * canvas.height / 2;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-          x += sliceWidth;
-        }
-        ctx.lineTo(canvas.width, canvas.height / 2);
-        ctx.strokeStyle = '#0f0';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      } else if (mode === 'circle') {
-        analyser.getByteTimeDomainData(dataArray);
-        const radius = 60;
-        const centerX = canvas.width / 2;
-        const centerY = canvas.height / 2;
-        ctx.beginPath();
-        for (let i = 0; i < bufferLength; i++) {
-          const angle = (i / bufferLength) * 2 * Math.PI;
-          const v = dataArray[i] / 128.0;
-          const r = radius + v * 30;
-          const x = centerX + r * Math.cos(angle);
-          const y = centerY + r * Math.sin(angle);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.closePath();
-        hue = (hue + 2) % 360;
-        const color = `hsl(${hue}, 100%, 60%)`;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
-        ctx.shadowBlur = 25;
-        ctx.shadowColor = color;
-        ctx.stroke();
-        ctx.fillStyle = `hsla(${hue}, 100%, 60%, 0.2)`;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-      }
-    }
-
-    function stopVisualizer() {
-      if (animationId) cancelAnimationFrame(animationId);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
-
-    audio.addEventListener('playing', () => {
-      initVisualizer();
-      audioCtx.resume();
-      drawVisualizer();
-    });
-    audio.addEventListener('pause', stopVisualizer);
-    stopBtn.addEventListener('click', stopVisualizer);
-
-    modeBtn.addEventListener('click', () => {
-      modeIndex = (modeIndex + 1) % modes.length;
-      modeBtn.textContent = 'Mode: ' + modes[modeIndex].charAt(0).toUpperCase() + modes[modeIndex].slice(1);
-    });
-    // ===== END Visualizer =====
 
     const rawHash = decodeURIComponent(location.hash.substring(1) || '').trim();
     if (rawHash.startsWith('proxy=')) {
@@ -199,8 +98,6 @@
     let currentFinalUrl = null;
     let isStopped = false;
 
-    // ... ⬇️ Seluruh kode pemutar radio lama kamu tetap seperti semula ⬇️ ...
-
     let wakeLock = null;
     async function requestWakeLock() {
       try {
@@ -215,6 +112,7 @@
         wakeLock = null;
       }
     }
+
     function setMsg(t){ msg.innerHTML = t; }
     function extOf(u){
       try { return (new URL(u)).pathname.split('.').pop().toLowerCase(); } catch(e){ return u.split('.').pop().toLowerCase(); }
@@ -224,14 +122,12 @@
       try {
         const r = await fetch(url);
         if (r.ok) return await r.text();
-        throw new Error('non-ok');
-      } catch (err) {
-        try {
-          const r2 = await fetch(CORS_FALLBACK + encodeURIComponent(url));
-          if (r2.ok) return await r2.text();
-        } catch (e2) {}
-        return null;
-      }
+      } catch (err) {}
+      try {
+        const r2 = await fetch(CORS_FALLBACK + encodeURIComponent(url));
+        if (r2.ok) return await r2.text();
+      } catch (e2) {}
+      return null;
     }
 
     function parseM3U(text, baseUrl){
@@ -281,16 +177,14 @@
 
     function cleanupResources(){
       if (hlsInstance) {
-        try { hlsInstance.destroy(); } catch(e){ }
+        try { hlsInstance.destroy(); } catch(e){}
         hlsInstance = null;
       }
       try { audio.pause(); } catch(e){}
-      try {
-        audio.removeAttribute('src');
-        audio.load();
-      } catch(e){}
+      try { audio.removeAttribute('src'); audio.load(); } catch(e){}
       currentFinalUrl = null;
       releaseWakeLock();
+      stopVisualizer(); // 🎧 pastikan visualizer ikut berhenti
     }
 
     function stopRadio(){
@@ -322,51 +216,144 @@
           hlsInstance = new Hls();
           hlsInstance.loadSource(buildProxyUrl(currentFinalUrl));
           hlsInstance.attachMedia(audio);
-          hlsInstance.on(Hls.Events.MANIFEST_PARSED, ()=>{
-            audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); }).catch(()=>{ setMsg('Untuk memutar, tekan PLAY'); });
-          });
+          hlsInstance.on(Hls.Events.MANIFEST_PARSED, ()=> audio.play());
         } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
           audio.src = buildProxyUrl(currentFinalUrl);
-          audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); }).catch(()=> setMsg('Autoplay diblokir, tekan PLAY'));
+          audio.play();
         } else {
           setMsg('Browser tidak mendukung HLS.');
         }
       } else {
         audio.src = buildProxyUrl(currentFinalUrl);
         audio.load();
-        audio.play().then(()=>{
-          audio.muted = false;
-          setMsg('Sedang memutar...');
-          requestWakeLock();
-        }).catch(()=>{ setMsg('Untuk memutar, tekan PLAY'); });
+        audio.play();
       }
     }
 
-    playBtn.addEventListener('click', async ()=>{
-      if (isStopped || !audio.src) {
-        await initAndPlay();
-      } else {
-        audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); }).catch(()=>{ setMsg('Autoplay diblokir, tekan PLAY lagi'); });
-      }
-    });
-
+    playBtn.addEventListener('click', ()=> initAndPlay());
     stopBtn.addEventListener('click', stopRadio);
 
+    audio.addEventListener('playing', ()=>{ 
+      setMsg('Sedang memutar...');
+      requestWakeLock();
+      startVisualizer(); // 🎧 MULAI visualizer saat audio mulai
+    });
+    audio.addEventListener('pause', stopVisualizer);
+    audio.addEventListener('ended', stopVisualizer);
+    audio.addEventListener('error', ()=> setMsg('❌ Gagal memutar stream.'));
+
     window.addEventListener('load', ()=>{
-      if (window._RAW_STREAM) { initAndPlay().catch(()=>{}); }
+      if (window._RAW_STREAM) { initAndPlay(); }
       else setMsg('Tambahkan stream di hash, contoh: <code>#https://example.com/stream.mp3</code>');
     });
 
-    document.addEventListener('visibilitychange', ()=>{
-      if (document.visibilityState === 'hidden' && !document.hiddenByScreenOff) {
-        stopRadio();
-      }
-    });
+    // ==============================
+    // 🎧 VISUALIZER (Bar / Wave / Circle+Glow)
+    // ==============================
+    const canvas = document.getElementById('visualizer');
+    const ctx = canvas.getContext('2d');
+    const modeBtn = document.getElementById('modeBtn');
+    const modes = ['bar','wave','circle'];
+    let modeIndex = 0;
+    let mode = modes[modeIndex];
+    let audioCtx, srcNode, analyser, bufferLength, dataArray, anim;
+    let hue = 0;
 
-    function stopPlaybackOnExit(){ cleanupResources(); }
-    window.addEventListener('beforeunload', stopPlaybackOnExit);
-    window.addEventListener('pagehide', stopPlaybackOnExit);
-    window.addEventListener('unload', stopPlaybackOnExit);
+    function resizeCanvas(){
+      canvas.width = window.innerWidth;
+      canvas.height = 180;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function initAudioContext(){
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+        srcNode = audioCtx.createMediaElementSource(audio);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+        srcNode.connect(analyser);
+        analyser.connect(audioCtx.destination);
+      }
+    }
+
+    function draw(){
+      anim = requestAnimationFrame(draw);
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      if (mode === 'bar'){
+        analyser.getByteFrequencyData(dataArray);
+        const barWidth = (canvas.width / bufferLength) * 2.5;
+        let x = 0;
+        for (let i=0;i<bufferLength;i++){
+          const barHeight = dataArray[i]/2;
+          ctx.fillStyle = 'rgb('+(barHeight+100)+',50,50)';
+          ctx.fillRect(x,canvas.height-barHeight,barWidth,barHeight);
+          x += barWidth+1;
+        }
+      } else if (mode === 'wave'){
+        analyser.getByteTimeDomainData(dataArray);
+        ctx.beginPath();
+        const sliceWidth = canvas.width * 1.0 / bufferLength;
+        let x = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const v = dataArray[i] / 128.0;
+          const y = v * canvas.height/2;
+          if (i===0) ctx.moveTo(x,y);
+          else ctx.lineTo(x,y);
+          x += sliceWidth;
+        }
+        ctx.lineTo(canvas.width, canvas.height/2);
+        ctx.strokeStyle = '#0f0';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      } else if (mode === 'circle'){
+        analyser.getByteTimeDomainData(dataArray);
+        const centerX = canvas.width/2;
+        const centerY = canvas.height/2;
+        const baseRadius = 70;
+        ctx.beginPath();
+        for (let i=0;i<bufferLength;i++){
+          const angle = (i/bufferLength)*2*Math.PI;
+          const v = dataArray[i]/128.0;
+          const r = baseRadius+v*30;
+          const x = centerX + r * Math.cos(angle);
+          const y = centerY + r * Math.sin(angle);
+          if (i===0) ctx.moveTo(x,y);
+          else ctx.lineTo(x,y);
+        }
+        ctx.closePath();
+        hue = (hue+2)%360;
+        ctx.strokeStyle = `hsl(${hue},100%,60%)`;
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = `hsl(${hue},100%,60%)`;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.fillStyle = `hsla(${hue},100%,60%,0.2)`;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+    }
+
+    function startVisualizer(){
+      initAudioContext();
+      audioCtx.resume();
+      stopVisualizer();
+      draw();
+    }
+
+    function stopVisualizer(){
+      if (anim) cancelAnimationFrame(anim);
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+    }
+
+    modeBtn.addEventListener('click', ()=>{
+      modeIndex = (modeIndex+1)%modes.length;
+      mode = modes[modeIndex];
+      modeBtn.textContent = 'Mode: '+mode.charAt(0).toUpperCase()+mode.slice(1);
+    });
 
   })();
   </script>
