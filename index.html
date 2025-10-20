@@ -21,28 +21,24 @@
     #msg { position:fixed; bottom:12px; left:12px; z-index:3; color:#ddd; font-size:12px; background:rgba(0,0,0,0.4); padding:6px 8px; border-radius:6px; }
     code { color:#9ad1ff; background:rgba(255,255,255,0.03); padding:2px 4px; border-radius:4px; }
 
-    /* 🎧 Canvas Visualizer */
+    /* 🎧 Tambahan Visualizer */
     #visualizer {
-      position: fixed;
-      bottom: 0;
-      left: 0;
       width: 100%;
-      height: 180px;
-      display: block;
-      z-index: 1;
+      height: 200px;
+      position: relative;
+      z-index: 2;
     }
-    #modeBtn {
+    #modeToggle {
       position: fixed;
       top: 10px;
       right: 10px;
-      z-index: 5;
       background: rgba(0,0,0,0.5);
+      font-size: 14px;
       color: white;
-      font-size: 13px;
-      padding: 4px 8px;
+      padding: 6px 10px;
       border-radius: 6px;
-      border: none;
       cursor: pointer;
+      z-index: 5;
     }
   </style>
 </head>
@@ -51,24 +47,22 @@
   <div id="background"></div>
   <img id="cover" alt="Cover">
 
+  <!-- 🎧 Canvas Visualizer -->
   <canvas id="visualizer"></canvas>
-  <button id="modeBtn">Mode: Bar</button>
+  <button id="modeToggle">Mode: Bar</button>
 
   <div class="controls">
     <button id="playBtn">PLAY</button>
     <button id="stopBtn" class="stop">STOP</button>
   </div>
 
-  <audio id="player" autoplay playsinline muted></audio>
+  <audio id="player" autoplay playsinline muted crossorigin="anonymous"></audio>
 
   <div id="msg">Memuat... (tambahkan stream setelah tanda <code>#</code>)</div>
 
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <script>
   (function(){
-    // ==============================
-    // ⚡ PLAYER ASLI (TIDAK DIUBAH)
-    // ==============================
     let PROXY_BASE = null;
     const CORS_FALLBACK = "https://api.allorigins.win/raw?url=";
 
@@ -97,14 +91,22 @@
     let hlsInstance = null;
     let currentFinalUrl = null;
     let isStopped = false;
+    let lastResolvedPlaylist = null;
 
+    // 🆕 Wake Lock Handler
     let wakeLock = null;
     async function requestWakeLock() {
       try {
         if ('wakeLock' in navigator) {
           wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => {
+            console.log('Wake Lock released');
+          });
+          console.log('Wake Lock active');
         }
-      } catch (err) {}
+      } catch (err) {
+        console.warn('Wake Lock not available:', err);
+      }
     }
     function releaseWakeLock() {
       if (wakeLock) {
@@ -122,12 +124,14 @@
       try {
         const r = await fetch(url);
         if (r.ok) return await r.text();
-      } catch (err) {}
-      try {
-        const r2 = await fetch(CORS_FALLBACK + encodeURIComponent(url));
-        if (r2.ok) return await r2.text();
-      } catch (e2) {}
-      return null;
+        throw new Error('non-ok');
+      } catch (err) {
+        try {
+          const r2 = await fetch(CORS_FALLBACK + encodeURIComponent(url));
+          if (r2.ok) return await r2.text();
+        } catch (e2) {}
+        return null;
+      }
     }
 
     function parseM3U(text, baseUrl){
@@ -175,16 +179,48 @@
       return PROXY_BASE + encodeURIComponent(u);
     }
 
+    async function attemptGetCover(streamUrl){
+      try {
+        const origin = (new URL(streamUrl)).origin;
+        const sj = await fetchTextWithFallback(origin + '/status-json.xsl');
+        if (sj) {
+          const j = JSON.parse(sj);
+          const sources = j.icestats && j.icestats.source
+            ? (Array.isArray(j.icestats.source) ? j.icestats.source : [j.icestats.source])
+            : null;
+          if (sources && sources.length){
+            let s0 = sources.find(s => (s.listenurl && s.listenurl === streamUrl) || (s.file && streamUrl.includes(s.file))) || sources[0];
+            const image = s0 && (s0.image || (s0.server_name && s0.server_name.image)) ? (s0.image || s0.server_name.image) : null;
+            if (image) return image;
+          }
+        }
+        const html = await fetchTextWithFallback(origin);
+        if (html) {
+          const m = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
+                || html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i)
+                || html.match(/<link[^>]*rel=["']image_src["'][^>]*href=["']([^"']+)["']/i);
+          if (m) {
+            try { return (new URL(m[1], origin)).href; }
+            catch(e) { return m[1]; }
+          }
+        }
+      } catch(e){}
+      return null;
+    }
+
     function cleanupResources(){
       if (hlsInstance) {
-        try { hlsInstance.destroy(); } catch(e){}
+        try { hlsInstance.destroy(); } catch(e){ }
         hlsInstance = null;
       }
       try { audio.pause(); } catch(e){}
-      try { audio.removeAttribute('src'); audio.load(); } catch(e){}
+      try {
+        audio.removeAttribute('src');
+        audio.load();
+      } catch(e){}
       currentFinalUrl = null;
+      stopVisualizer(); // 🎧 stop visualizer
       releaseWakeLock();
-      stopVisualizer(); // 🎧 pastikan visualizer ikut berhenti
     }
 
     function stopRadio(){
@@ -209,6 +245,17 @@
         currentFinalUrl = window._RAW_STREAM;
       }
 
+      attemptGetCover(currentFinalUrl).then(img=>{
+        if (img){
+          cover.src = img;
+          cover.style.display = 'block';
+          background.style.backgroundImage = `url("${img}")`;
+        } else {
+          cover.style.display = 'none';
+          background.style.backgroundImage = '';
+        }
+      });
+
       const ext = extOf(currentFinalUrl || '');
       if (ext === 'm3u8') {
         if (window.Hls && Hls.isSupported()){
@@ -216,143 +263,171 @@
           hlsInstance = new Hls();
           hlsInstance.loadSource(buildProxyUrl(currentFinalUrl));
           hlsInstance.attachMedia(audio);
-          hlsInstance.on(Hls.Events.MANIFEST_PARSED, ()=> audio.play());
+          hlsInstance.on(Hls.Events.MANIFEST_PARSED, ()=>{
+            audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); startVisualizer(); }).catch(()=>{ setMsg('Untuk memutar, tekan PLAY'); });
+          });
         } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
           audio.src = buildProxyUrl(currentFinalUrl);
-          audio.play();
+          audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); startVisualizer(); }).catch(()=> setMsg('Autoplay diblokir, tekan PLAY'));
         } else {
           setMsg('Browser tidak mendukung HLS.');
         }
       } else {
         audio.src = buildProxyUrl(currentFinalUrl);
         audio.load();
-        audio.play();
+        audio.play().then(()=>{
+          audio.muted = false;
+          setMsg('Sedang memutar...');
+          requestWakeLock();
+          startVisualizer(); // 🎧 mulai visualizer
+        }).catch(()=>{ setMsg('Untuk memutar, tekan PLAY'); });
       }
     }
 
-    playBtn.addEventListener('click', ()=> initAndPlay());
+    function onAudioError(){ setMsg('❌ Gagal memutar stream.'); }
+    function onPlaying(){ setMsg('Sedang memutar...'); }
+
+    playBtn.addEventListener('click', async ()=>{
+      if (isStopped || !audio.src || !currentFinalUrl) {
+        await initAndPlay();
+      } else {
+        audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); startVisualizer(); }).catch(()=>{ setMsg('Autoplay diblokir, tekan PLAY lagi'); });
+      }
+    });
+
     stopBtn.addEventListener('click', stopRadio);
 
-    audio.addEventListener('playing', ()=>{ 
-      setMsg('Sedang memutar...');
-      requestWakeLock();
-      startVisualizer(); // 🎧 MULAI visualizer saat audio mulai
-    });
-    audio.addEventListener('pause', stopVisualizer);
-    audio.addEventListener('ended', stopVisualizer);
-    audio.addEventListener('error', ()=> setMsg('❌ Gagal memutar stream.'));
-
     window.addEventListener('load', ()=>{
-      if (window._RAW_STREAM) { initAndPlay(); }
+      if (window._RAW_STREAM) { initAndPlay().catch(()=>{}); }
       else setMsg('Tambahkan stream di hash, contoh: <code>#https://example.com/stream.mp3</code>');
     });
 
-    // ==============================
-    // 🎧 VISUALIZER (Bar / Wave / Circle+Glow)
-    // ==============================
+    document.addEventListener('visibilitychange', ()=>{
+      if (document.visibilityState === 'hidden' && !document.hiddenByScreenOff) {
+        stopRadio();
+      }
+    });
+
+    function stopPlaybackOnExit(){ cleanupResources(); }
+    window.addEventListener('beforeunload', stopPlaybackOnExit);
+    window.addEventListener('pagehide', stopPlaybackOnExit);
+    window.addEventListener('unload', stopPlaybackOnExit);
+
+    /* === 🎧 Visualizer Section (Bar / Wave / Circle + Glow) === */
     const canvas = document.getElementById('visualizer');
     const ctx = canvas.getContext('2d');
-    const modeBtn = document.getElementById('modeBtn');
-    const modes = ['bar','wave','circle'];
+    const modeToggle = document.getElementById('modeToggle');
+    const modes = ['bar', 'wave', 'circle'];
     let modeIndex = 0;
     let mode = modes[modeIndex];
-    let audioCtx, srcNode, analyser, bufferLength, dataArray, anim;
     let hue = 0;
 
-    function resizeCanvas(){
+    let audioContext, source, analyser, dataArray, bufferLength, animationId;
+
+    function resizeCanvas() {
       canvas.width = window.innerWidth;
-      canvas.height = 180;
+      canvas.height = 200;
     }
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
 
-    function initAudioContext(){
-      if (!audioCtx) {
-        audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-        srcNode = audioCtx.createMediaElementSource(audio);
-        analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 2048;
-        bufferLength = analyser.frequencyBinCount;
-        dataArray = new Uint8Array(bufferLength);
-        srcNode.connect(analyser);
-        analyser.connect(audioCtx.destination);
+    function initAudioContext() {
+      if (!audioContext) {
+        try {
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          source = audioContext.createMediaElementSource(audio);
+          analyser = audioContext.createAnalyser();
+          analyser.fftSize = 2048;
+          bufferLength = analyser.frequencyBinCount;
+          dataArray = new Uint8Array(bufferLength);
+          source.connect(analyser);
+          analyser.connect(audioContext.destination);
+        } catch (e) {
+          console.warn('AudioContext init failed', e);
+        }
       }
     }
 
-    function draw(){
-      anim = requestAnimationFrame(draw);
-      ctx.clearRect(0,0,canvas.width,canvas.height);
+    function drawVisualizer() {
+      animationId = requestAnimationFrame(drawVisualizer);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!analyser) return;
 
-      if (mode === 'bar'){
+      if (mode === 'bar') {
         analyser.getByteFrequencyData(dataArray);
         const barWidth = (canvas.width / bufferLength) * 2.5;
         let x = 0;
-        for (let i=0;i<bufferLength;i++){
-          const barHeight = dataArray[i]/2;
-          ctx.fillStyle = 'rgb('+(barHeight+100)+',50,50)';
-          ctx.fillRect(x,canvas.height-barHeight,barWidth,barHeight);
-          x += barWidth+1;
+        for (let i = 0; i < bufferLength; i++) {
+          const barHeight = dataArray[i] / 2;
+          ctx.fillStyle = 'rgb(' + (barHeight + 100) + ',50,50)';
+          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+          x += barWidth + 1;
+          if (x > canvas.width) break;
         }
-      } else if (mode === 'wave'){
+      } else if (mode === 'wave') {
         analyser.getByteTimeDomainData(dataArray);
         ctx.beginPath();
-        const sliceWidth = canvas.width * 1.0 / bufferLength;
+        const sliceWidth = canvas.width / bufferLength;
         let x = 0;
         for (let i = 0; i < bufferLength; i++) {
           const v = dataArray[i] / 128.0;
-          const y = v * canvas.height/2;
-          if (i===0) ctx.moveTo(x,y);
-          else ctx.lineTo(x,y);
+          const y = v * canvas.height / 2;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
           x += sliceWidth;
         }
-        ctx.lineTo(canvas.width, canvas.height/2);
+        ctx.lineTo(canvas.width, canvas.height / 2);
         ctx.strokeStyle = '#0f0';
         ctx.lineWidth = 2;
         ctx.stroke();
-      } else if (mode === 'circle'){
+      } else if (mode === 'circle') {
         analyser.getByteTimeDomainData(dataArray);
-        const centerX = canvas.width/2;
-        const centerY = canvas.height/2;
-        const baseRadius = 70;
+        const radius = 80;
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
         ctx.beginPath();
-        for (let i=0;i<bufferLength;i++){
-          const angle = (i/bufferLength)*2*Math.PI;
-          const v = dataArray[i]/128.0;
-          const r = baseRadius+v*30;
+        for (let i = 0; i < bufferLength; i++) {
+          const angle = (i / bufferLength) * 2 * Math.PI;
+          const v = (dataArray[i] - 128) / 128.0;
+          const r = radius + v * 60;
           const x = centerX + r * Math.cos(angle);
           const y = centerY + r * Math.sin(angle);
-          if (i===0) ctx.moveTo(x,y);
-          else ctx.lineTo(x,y);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
         }
         ctx.closePath();
-        hue = (hue+2)%360;
-        ctx.strokeStyle = `hsl(${hue},100%,60%)`;
-        ctx.shadowBlur = 20;
-        ctx.shadowColor = `hsl(${hue},100%,60%)`;
+        hue = (hue + 2) % 360;
+        const color = `hsl(${hue}, 100%, 60%)`;
+        ctx.strokeStyle = color;
         ctx.lineWidth = 3;
+        ctx.shadowBlur = 25;
+        ctx.shadowColor = color;
         ctx.stroke();
-        ctx.fillStyle = `hsla(${hue},100%,60%,0.2)`;
+        const gradient = ctx.createRadialGradient(centerX, centerY, radius*0.2, centerX, centerY, radius + 60);
+        gradient.addColorStop(0, `hsla(${hue},100%,60%,0.45)`);
+        gradient.addColorStop(1, `hsla(${(hue+60)%360},100%,50%,0.05)`);
+        ctx.fillStyle = gradient;
         ctx.fill();
         ctx.shadowBlur = 0;
       }
     }
 
-    function startVisualizer(){
+    function startVisualizer() {
       initAudioContext();
-      audioCtx.resume();
       stopVisualizer();
-      draw();
+      drawVisualizer();
     }
 
-    function stopVisualizer(){
-      if (anim) cancelAnimationFrame(anim);
-      ctx.clearRect(0,0,canvas.width,canvas.height);
+    function stopVisualizer() {
+      if (animationId) cancelAnimationFrame(animationId);
+      animationId = null;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
 
-    modeBtn.addEventListener('click', ()=>{
-      modeIndex = (modeIndex+1)%modes.length;
+    modeToggle.addEventListener('click', () => {
+      modeIndex = (modeIndex + 1) % modes.length;
       mode = modes[modeIndex];
-      modeBtn.textContent = 'Mode: '+mode.charAt(0).toUpperCase()+mode.slice(1);
+      modeToggle.textContent = 'Mode: ' + mode.charAt(0).toUpperCase() + mode.slice(1);
     });
 
   })();
