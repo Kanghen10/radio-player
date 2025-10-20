@@ -14,6 +14,17 @@
     }
     #background { position:fixed; inset:0; background:#000; background-size:cover; background-position:center; opacity:0.18; z-index:0; }
     #cover { max-width:80%; max-height:45%; object-fit:cover; border-radius:10px; margin-bottom:12px; background:#000; display:none; z-index:1; }
+    /* Visualizer canvas */
+    #visualizer {
+      width: 88%;
+      max-width: 900px;
+      height: 140px;
+      border-radius:10px;
+      margin-bottom:12px;
+      display:none;
+      z-index:1;
+      background: rgba(0,0,0,0.12);
+    }
     .controls { display:flex; gap:12px; z-index:2; }
     button { padding:8px 18px; font-size:14px; font-weight:600; border:none; border-radius:6px; cursor:pointer; background:#1a73e8; color:#fff; }
     button.stop { background:#d93025; }
@@ -26,6 +37,8 @@
 
   <div id="background"></div>
   <img id="cover" alt="Cover">
+  <!-- VISUALIZER (muncul ketika cover tidak ada) -->
+  <canvas id="visualizer" aria-hidden="true"></canvas>
 
   <div class="controls">
     <button id="playBtn">PLAY</button>
@@ -46,6 +59,7 @@
     const playBtn = document.getElementById('playBtn');
     const stopBtn = document.getElementById('stopBtn');
     const cover = document.getElementById('cover');
+    const visualizerCanvas = document.getElementById('visualizer');
     const msg = document.getElementById('msg');
     const background = document.getElementById('background');
 
@@ -160,15 +174,17 @@
         const origin = (new URL(streamUrl)).origin;
         const sj = await fetchTextWithFallback(origin + '/status-json.xsl');
         if (sj) {
-          const j = JSON.parse(sj);
-          const sources = j.icestats && j.icestats.source
-            ? (Array.isArray(j.icestats.source) ? j.icestats.source : [j.icestats.source])
-            : null;
-          if (sources && sources.length){
-            let s0 = sources.find(s => (s.listenurl && s.listenurl === streamUrl) || (s.file && streamUrl.includes(s.file))) || sources[0];
-            const image = s0 && (s0.image || (s0.server_name && s0.server_name.image)) ? (s0.image || s0.server_name.image) : null;
-            if (image) return image;
-          }
+          try {
+            const j = JSON.parse(sj);
+            const sources = j.icestats && j.icestats.source
+              ? (Array.isArray(j.icestats.source) ? j.icestats.source : [j.icestats.source])
+              : null;
+            if (sources && sources.length){
+              let s0 = sources.find(s => (s.listenurl && s.listenurl === streamUrl) || (s.file && streamUrl.includes(s.file))) || sources[0];
+              const image = s0 && (s0.image || (s0.server_name && s0.server_name.image)) ? (s0.image || s0.server_name.image) : null;
+              if (image) return image;
+            }
+          } catch(e){}
         }
         const html = await fetchTextWithFallback(origin);
         if (html) {
@@ -184,6 +200,91 @@
       return null;
     }
 
+    // ----------------- VISUALIZER (Web Audio API) -----------------
+    let audioCtx = null;
+    let analyser = null;
+    let sourceNode = null;
+    let dataArray = null;
+    let animationId = null;
+
+    function initVisualizer() {
+      if (audioCtx) return;
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256; // kecil -> ringan CPU
+        const bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+
+        // createMediaElementSource must be called once; handle exceptions
+        try {
+          sourceNode = audioCtx.createMediaElementSource(audio);
+          sourceNode.connect(analyser);
+          analyser.connect(audioCtx.destination);
+        } catch (e) {
+          // some browsers may restrict createMediaElementSource in certain contexts
+          console.warn('createMediaElementSource failed:', e);
+          // fallback: connect analyser only if available - else visualizer won't run
+        }
+      } catch (e) {
+        console.warn('AudioContext init failed:', e);
+      }
+    }
+
+    function drawVisualizer() {
+      if (!analyser || !dataArray) return;
+      const canvas = visualizerCanvas;
+      const ctx = canvas.getContext('2d');
+      const DPR = window.devicePixelRatio || 1;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      if (canvas.width !== width * DPR || canvas.height !== height * DPR) {
+        canvas.width = Math.floor(width * DPR);
+        canvas.height = Math.floor(height * DPR);
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      analyser.getByteFrequencyData(dataArray);
+      const barCount = dataArray.length;
+      const barWidth = Math.max(2, canvas.width / barCount * 1.6);
+      let x = 0;
+      for (let i = 0; i < barCount; i++) {
+        const v = dataArray[i];
+        const barHeight = (v / 255) * canvas.height;
+        const g = Math.max(0, Math.min(255, Math.floor(180 - (barHeight / canvas.height) * 120)));
+        ctx.fillStyle = `rgb(${g + 40}, ${180}, ${255 - Math.floor(g/2)})`;
+        ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+        x += barWidth + 1;
+        if (x > canvas.width) break;
+      }
+      animationId = requestAnimationFrame(drawVisualizer);
+    }
+
+    function startVisualizer() {
+      try {
+        initVisualizer();
+        if (audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(()=>{});
+        }
+        visualizerCanvas.style.display = 'block';
+        if (!animationId) drawVisualizer();
+      } catch (e) {
+        console.warn('startVisualizer error', e);
+      }
+    }
+
+    function stopVisualizer() {
+      try {
+        if (animationId) cancelAnimationFrame(animationId);
+        animationId = null;
+        const ctx = visualizerCanvas.getContext('2d');
+        if (ctx) ctx.clearRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
+        visualizerCanvas.style.display = 'none';
+      } catch (e) {
+        console.warn('stopVisualizer', e);
+      }
+    }
+    // ----------------- END VISUALIZER -----------------
+
     function cleanupResources(){
       if (hlsInstance) {
         try { hlsInstance.destroy(); } catch(e){ }
@@ -195,7 +296,8 @@
         audio.load();
       } catch(e){}
       currentFinalUrl = null;
-      releaseWakeLock(); // 🆕 pastikan lock dilepas saat stop total
+      releaseWakeLock(); // pastikan lock dilepas saat stop total
+      stopVisualizer(); // hentikan visualizer saat cleanup
     }
 
     function stopRadio(){
@@ -220,15 +322,24 @@
         currentFinalUrl = window._RAW_STREAM;
       }
 
+      // Ambil cover; jika ada tampilkan, jika tidak tampilkan visualizer
       attemptGetCover(currentFinalUrl).then(img=>{
         if (img){
+          // ada cover -> tampilkan cover, sembunyikan visualizer
+          stopVisualizer();
           cover.src = img;
           cover.style.display = 'block';
           background.style.backgroundImage = `url("${img}")`;
         } else {
+          // tidak ada cover -> sembunyikan cover, tampilkan visualizer
           cover.style.display = 'none';
           background.style.backgroundImage = '';
+          startVisualizer();
         }
+      }).catch(()=> {
+        cover.style.display = 'none';
+        background.style.backgroundImage = '';
+        startVisualizer();
       });
 
       const ext = extOf(currentFinalUrl || '');
@@ -276,7 +387,7 @@
       else setMsg('Tambahkan stream di hash, contoh: <code>#https://example.com/stream.mp3</code>');
     });
 
-    // ⬇️ Tetap stop total saat benar-benar pindah tab
+    // Tetap stop total saat benar-benar pindah tab
     document.addEventListener('visibilitychange', ()=>{
       if (document.visibilityState === 'hidden' && !document.hiddenByScreenOff) {
         stopRadio();
