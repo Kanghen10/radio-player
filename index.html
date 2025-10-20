@@ -26,6 +26,16 @@
       margin-bottom: 20px;
       border-radius: 8px;
     }
+    #visualizer {
+      width: 100%;
+      height: 200px;
+    }
+    #statusText {
+      margin-top: 10px;
+      font-size: 16px;
+      min-height: 24px;
+      text-align: center;
+    }
     #controls {
       margin-top: 10px;
       display: flex;
@@ -49,10 +59,6 @@
     button:hover {
       transform: scale(1.05);
     }
-    #visualizer {
-      width: 100%;
-      height: 200px;
-    }
     #modeToggle {
       position: absolute;
       top: 10px;
@@ -68,6 +74,8 @@
   <div id="albumArt"></div>
 
   <canvas id="visualizer"></canvas>
+
+  <div id="statusText"></div>
 
   <div id="controls">
     <button id="playBtn">PLAY</button>
@@ -86,6 +94,7 @@
     const canvas = document.getElementById('visualizer');
     const ctx = canvas.getContext('2d');
     const modeToggle = document.getElementById('modeToggle');
+    const statusText = document.getElementById('statusText');
 
     const modes = ['bar', 'wave', 'circle'];
     let modeIndex = 0;
@@ -93,6 +102,11 @@
     let hue = 0;
 
     let audioContext, source, analyser, dataArray, bufferLength, animationId;
+
+    function setStatus(text, color = '#fff') {
+      statusText.textContent = text;
+      statusText.style.color = color;
+    }
 
     function resizeCanvas() {
       canvas.width = window.innerWidth;
@@ -152,7 +166,6 @@
         const centerX = canvas.width / 2;
         const centerY = canvas.height / 2;
 
-        // Hitung path lingkaran
         ctx.beginPath();
         for (let i = 0; i < bufferLength; i++) {
           const angle = (i / bufferLength) * 2 * Math.PI;
@@ -165,7 +178,6 @@
         }
         ctx.closePath();
 
-        // Glow line
         hue = (hue + 2) % 360;
         ctx.strokeStyle = `hsl(${hue}, 100%, 60%)`;
         ctx.lineWidth = 3;
@@ -173,7 +185,6 @@
         ctx.shadowColor = `hsl(${hue}, 100%, 60%)`;
         ctx.stroke();
 
-        // Plasma fill di dalam lingkaran
         const gradient = ctx.createRadialGradient(centerX, centerY, radius * 0.2, centerX, centerY, radius + 30);
         gradient.addColorStop(0, `hsla(${hue}, 100%, 60%, 0.6)`);
         gradient.addColorStop(1, `hsla(${(hue+60)%360}, 100%, 50%, 0.1)`);
@@ -192,9 +203,12 @@
     playBtn.addEventListener('click', () => {
       if (audio.src) {
         initAudioContext();
-        audio.play();
-        audioContext.resume();
-        drawVisualizer();
+        audio.play().then(() => {
+          audioContext.resume();
+          drawVisualizer();
+        }).catch(err => {
+          setStatus('Gagal memutar atau Radio Sedang Offline', '#ff5555');
+        });
       }
     });
 
@@ -202,6 +216,7 @@
       audio.pause();
       audio.currentTime = 0;
       stopVisualizer();
+      setStatus('Radio Berhenti', '#aaa');
     });
 
     modeToggle.addEventListener('click', () => {
@@ -213,16 +228,27 @@
     function loadStreamFromHash() {
       const streamUrl = decodeURIComponent(window.location.hash.substring(1));
       if (streamUrl) {
+        setStatus('Sedang Loading Radio...', '#ff0');
         audio.src = streamUrl;
         audio.play().then(() => {
           initAudioContext();
           drawVisualizer();
         }).catch(err => {
+          setStatus('Gagal memutar atau Radio Sedang Offline', '#ff5555');
           console.warn('Autoplay blocked:', err);
         });
         albumArt.style.backgroundImage = '';
+      } else {
+        setStatus('Silakan pilih atau masukkan URL radio.', '#ccc');
       }
     }
+
+    // Audio event listeners
+    audio.addEventListener('waiting', () => setStatus('Sedang Loading Radio...', '#ff0'));
+    audio.addEventListener('playing', () => setStatus('Sedang Memutar', '#0f0'));
+    audio.addEventListener('pause', () => setStatus('Radio Dijeda', '#aaa'));
+    audio.addEventListener('ended', () => setStatus('Radio Berhenti', '#aaa'));
+    audio.addEventListener('error', () => setStatus('Gagal memutar atau Radio Sedang Offline', '#ff5555'));
 
     window.addEventListener('hashchange', loadStreamFromHash);
 
@@ -232,10 +258,10 @@
         audio.pause();
         audio.currentTime = 0;
         stopVisualizer();
+        setStatus('Radio Berhenti', '#aaa');
       }
     });
 
-    // Stop saat tab ditutup
     window.addEventListener('beforeunload', () => {
       audio.pause();
       audio.currentTime = 0;
