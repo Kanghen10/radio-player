@@ -46,10 +46,7 @@
       font-size: 16px;
       transition: box-shadow 0.3s ease;
     }
-    #playBtn:hover {
-      background: #0040ff;
-    }
-    /* ✨ Efek denyut glow biru saat radio jalan */
+    #playBtn:hover { background: #0040ff; }
     #playBtn.playing {
       animation: pulseGlow 1.5s infinite;
       box-shadow: 0 0 10px rgba(0, 128, 255, 0.7);
@@ -67,13 +64,8 @@
       cursor: pointer;
       font-size: 16px;
     }
-    #stopBtn:hover {
-      background: #cc0000;
-    }
-    #visualizer {
-      width: 100%;
-      height: 200px;
-    }
+    #stopBtn:hover { background: #cc0000; }
+    #visualizer { width: 100%; height: 200px; }
     #modeToggle {
       position: absolute;
       top: 10px;
@@ -84,6 +76,7 @@
     }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
 </head>
 <body>
   <div id="albumArt"></div>
@@ -113,7 +106,7 @@
     let hue = 0;
 
     let audioContext, source, analyser, dataArray, bufferLength, animationId;
-    let hls;
+    let hls, dashPlayer;
 
     function resizeCanvas() {
       canvas.width = window.innerWidth;
@@ -211,7 +204,7 @@
           audioContext.resume();
           drawVisualizer();
         }).catch(() => {
-          statusText.textContent = "Gagal memutar atau Radio sedang Offline";
+          statusText.textContent = "Tekan tombol Play untuk memutar Radio";
         });
       }
     });
@@ -230,32 +223,33 @@
       modeToggle.textContent = 'Mode: ' + mode.charAt(0).toUpperCase() + mode.slice(1);
     });
 
-    function loadStreamFromHash() {
-      const streamUrl = decodeURIComponent(window.location.hash.substring(1));
-      if (!streamUrl) {
-        statusText.textContent = "Tekan tombol Play untuk memutar Radio";
-        return;
-      }
+    function detectStreamTypeAndPlay(url) {
+      // cleanup previous players
+      if (hls) { hls.destroy(); hls = null; }
+      if (dashPlayer) { dashPlayer.reset(); dashPlayer = null; }
 
-      // cleanup previous hls instance
-      if (hls) {
-        hls.destroy();
-        hls = null;
-      }
-
-      if (streamUrl.endsWith('.m3u8')) {
+      const lower = url.toLowerCase();
+      if (lower.endsWith('.m3u8')) {
         if (Hls.isSupported()) {
           hls = new Hls();
-          hls.loadSource(streamUrl);
+          hls.loadSource(url);
           hls.attachMedia(audio);
         } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-          audio.src = streamUrl;
+          audio.src = url;
         } else {
           statusText.textContent = "Browser tidak mendukung HLS";
           return;
         }
+      } else if (lower.endsWith('.mpd')) {
+        dashPlayer = dashjs.MediaPlayer().create();
+        dashPlayer.initialize(audio, url, true);
       } else {
-        audio.src = streamUrl;
+        // handle Shoutcast/Icecast style .../;
+        if (url.endsWith('/;')) {
+          audio.src = url + 'type=.mp3';
+        } else {
+          audio.src = url;
+        }
       }
 
       audio.play().then(() => {
@@ -264,7 +258,15 @@
       }).catch(() => {
         statusText.textContent = "Tekan tombol Play untuk memutar Radio";
       });
+    }
 
+    function loadStreamFromHash() {
+      const streamUrl = decodeURIComponent(window.location.hash.substring(1));
+      if (!streamUrl) {
+        statusText.textContent = "Tekan tombol Play untuk memutar Radio";
+        return;
+      }
+      detectStreamTypeAndPlay(streamUrl);
       albumArt.style.backgroundImage = '';
     }
 
