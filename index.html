@@ -32,15 +32,22 @@
       gap: 10px;
     }
     button {
-      background: #111;
       color: white;
-      border: 1px solid #444;
+      border: none;
       padding: 10px 20px;
       cursor: pointer;
       font-size: 16px;
+      border-radius: 4px;
+      transition: transform 0.15s ease;
+    }
+    #playBtn {
+      background: #007bff; /* Biru */
+    }
+    #stopBtn {
+      background: #dc3545; /* Merah */
     }
     button:hover {
-      background: #333;
+      transform: scale(1.05);
     }
     #visualizer {
       width: 100%;
@@ -52,6 +59,8 @@
       right: 10px;
       background: rgba(0,0,0,0.5);
       font-size: 14px;
+      padding: 6px 10px;
+      border-radius: 4px;
     }
   </style>
 </head>
@@ -81,7 +90,7 @@
     const modes = ['bar', 'wave', 'circle'];
     let modeIndex = 0;
     let mode = modes[modeIndex];
-    let hue = 0; // 🌈 untuk animasi warna glow
+    let hue = 0;
 
     let audioContext, source, analyser, dataArray, bufferLength, animationId;
 
@@ -108,6 +117,8 @@
     function drawVisualizer() {
       animationId = requestAnimationFrame(drawVisualizer);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (!analyser) return;
 
       if (mode === 'bar') {
         analyser.getByteFrequencyData(dataArray);
@@ -140,6 +151,8 @@
         const radius = 80;
         const centerX = canvas.width / 2;
         const centerY = canvas.height / 2;
+
+        // Hitung path lingkaran
         ctx.beginPath();
         for (let i = 0; i < bufferLength; i++) {
           const angle = (i / bufferLength) * 2 * Math.PI;
@@ -151,16 +164,22 @@
           else ctx.lineTo(x, y);
         }
         ctx.closePath();
-        
-        // 🌈 efek glow neon
-        hue = (hue + 2) % 360; 
+
+        // Glow line
+        hue = (hue + 2) % 360;
         ctx.strokeStyle = `hsl(${hue}, 100%, 60%)`;
         ctx.lineWidth = 3;
         ctx.shadowBlur = 25;
         ctx.shadowColor = `hsl(${hue}, 100%, 60%)`;
         ctx.stroke();
 
-        // reset shadow supaya tidak bocor ke mode lain
+        // Plasma fill di dalam lingkaran
+        const gradient = ctx.createRadialGradient(centerX, centerY, radius * 0.2, centerX, centerY, radius + 30);
+        gradient.addColorStop(0, `hsla(${hue}, 100%, 60%, 0.6)`);
+        gradient.addColorStop(1, `hsla(${(hue+60)%360}, 100%, 50%, 0.1)`);
+        ctx.fillStyle = gradient;
+        ctx.fill();
+
         ctx.shadowBlur = 0;
       }
     }
@@ -207,13 +226,16 @@
 
     window.addEventListener('hashchange', loadStreamFromHash);
 
+    // Stop total saat berpindah tab
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         audio.pause();
+        audio.currentTime = 0;
         stopVisualizer();
       }
     });
 
+    // Stop saat tab ditutup
     window.addEventListener('beforeunload', () => {
       audio.pause();
       audio.currentTime = 0;
