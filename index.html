@@ -1,294 +1,153 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Radio Player</title>
+  <meta charset="UTF-8" />
+  <title>Radio Player + Visualizer</title>
   <style>
     html, body {
-      margin: 0; padding: 0;
-      width: 100%; height: 100%;
-      background: #000; overflow: hidden;
-      display:flex; flex-direction:column; align-items:center; justify-content:center;
-      color:#fff; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
     }
-    #background { position:fixed; inset:0; background:#000; background-size:cover; background-position:center; opacity:0.18; z-index:0; }
-    #cover { max-width:80%; max-height:45%; object-fit:cover; border-radius:10px; margin-bottom:12px; background:#000; display:none; z-index:1; }
-    .controls { display:flex; gap:12px; z-index:2; }
-    button { padding:8px 18px; font-size:14px; font-weight:600; border:none; border-radius:6px; cursor:pointer; background:#1a73e8; color:#fff; }
-    button.stop { background:#d93025; }
-    audio { display:none; }
-    #msg { position:fixed; bottom:12px; left:12px; z-index:3; color:#ddd; font-size:12px; background:rgba(0,0,0,0.4); padding:6px 8px; border-radius:6px; }
-    code { color:#9ad1ff; background:rgba(255,255,255,0.03); padding:2px 4px; border-radius:4px; }
+    #artwork {
+      width: 200px;
+      height: 200px;
+      background: #111 center/cover no-repeat;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    #controls {
+      margin-bottom: 20px;
+    }
+    button {
+      background: lime;
+      border: none;
+      padding: 10px 20px;
+      margin: 0 10px;
+      font-size: 16px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    canvas {
+      width: 100%;
+      height: 200px;
+      background: #000;
+      display: block;
+    }
   </style>
 </head>
 <body>
 
-  <div id="background"></div>
-  <img id="cover" alt="Cover">
-
-  <div class="controls">
+  <div id="artwork"></div>
+  <div id="controls">
     <button id="playBtn">PLAY</button>
-    <button id="stopBtn" class="stop">STOP</button>
+    <button id="stopBtn">STOP</button>
   </div>
+  <audio id="radioPlayer" crossorigin="anonymous"></audio>
+  <canvas id="visualizer"></canvas>
 
-  <audio id="player" autoplay playsinline muted></audio>
-
-  <div id="msg">Memuat... (tambahkan stream setelah tanda <code>#</code>)</div>
-
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <script>
-  (function(){
-    let PROXY_BASE = null;
-    const CORS_FALLBACK = "https://api.allorigins.win/raw?url=";
-
-    const audio = document.getElementById('player');
+    const audio = document.getElementById('radioPlayer');
     const playBtn = document.getElementById('playBtn');
     const stopBtn = document.getElementById('stopBtn');
-    const cover = document.getElementById('cover');
-    const msg = document.getElementById('msg');
-    const background = document.getElementById('background');
+    const artwork = document.getElementById('artwork');
+    const canvas = document.getElementById('visualizer');
+    const ctx = canvas.getContext('2d');
 
-    const rawHash = decodeURIComponent(location.hash.substring(1) || '').trim();
-    if (rawHash.startsWith('proxy=')) {
-      const idx = rawHash.indexOf('|');
-      if (idx > -1) {
-        const p = rawHash.substring(6, idx);
-        const s = rawHash.substring(idx+1);
-        if (p) PROXY_BASE = p;
-        window._RAW_STREAM = s;
-      } else {
-        window._RAW_STREAM = rawHash.substring(6);
-      }
-    } else {
-      window._RAW_STREAM = rawHash;
+    let audioCtx, analyser, source, animationId;
+
+    // Ambil URL radio dari hash
+    function getRadioURL() {
+      const hash = window.location.hash;
+      return hash ? decodeURIComponent(hash.substring(1)) : '';
     }
 
-    let hlsInstance = null;
-    let currentFinalUrl = null;
-    let isStopped = false;
-    let lastResolvedPlaylist = null;
+    function initAudioContext() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioCtx.createAnalyser();
+        source = audioCtx.createMediaElementSource(audio);
+        source.connect(analyser);
+        analyser.connect(audioCtx.destination);
+        analyser.fftSize = 256;
+      }
+    }
 
-    // 🆕 Wake Lock Handler
-    let wakeLock = null;
-    async function requestWakeLock() {
+    function drawVisualizer() {
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      function draw() {
+        animationId = requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(dataArray);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const barWidth = (canvas.width / bufferLength) * 2.5;
+        let x = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const barHeight = dataArray[i] / 2;
+          ctx.fillStyle = 'lime';
+          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+          x += barWidth + 1;
+        }
+      }
+      draw();
+    }
+
+    function stopVisualizer() {
+      if (animationId) cancelAnimationFrame(animationId);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    playBtn.addEventListener('click', async () => {
+      const url = getRadioURL();
+      if (!url) return alert('Masukkan URL radio di hash browser');
+
+      audio.src = url;
+      initAudioContext();
+
       try {
-        if ('wakeLock' in navigator) {
-          wakeLock = await navigator.wakeLock.request('screen');
-          wakeLock.addEventListener('release', () => {
-            console.log('Wake Lock released');
-          });
-          console.log('Wake Lock active');
-        }
-      } catch (err) {
-        console.warn('Wake Lock not available:', err);
-      }
-    }
-    function releaseWakeLock() {
-      if (wakeLock) {
-        wakeLock.release().catch(()=>{});
-        wakeLock = null;
-      }
-    }
-
-    function setMsg(t){ msg.innerHTML = t; }
-    function extOf(u){
-      try { return (new URL(u)).pathname.split('.').pop().toLowerCase(); } catch(e){ return u.split('.').pop().toLowerCase(); }
-    }
-
-    async function fetchTextWithFallback(url){
-      try {
-        const r = await fetch(url);
-        if (r.ok) return await r.text();
-        throw new Error('non-ok');
-      } catch (err) {
-        try {
-          const r2 = await fetch(CORS_FALLBACK + encodeURIComponent(url));
-          if (r2.ok) return await r2.text();
-        } catch (e2) {}
-        return null;
-      }
-    }
-
-    function parseM3U(text, baseUrl){
-      const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-      for (const l of lines){
-        if (l.startsWith('#')) continue;
-        if (l.startsWith('http')) return l;
-        if (baseUrl) {
-          try { return (new URL(l, baseUrl)).href; } catch(e){}
-        }
-      }
-      return null;
-    }
-    function parsePLS(text){
-      const lines = text.split(/\r?\n/);
-      for (const l of lines){
-        if (/^File\d+=/i.test(l)){
-          const v = l.split('=')[1].trim();
-          if (v) return v;
-        }
-      }
-      return null;
-    }
-
-    async function tryResolvePlaylist(url){
-      const ext = extOf(url || '');
-      if (ext === 'm3u8') return url;
-      if (!(ext === 'm3u' || ext === 'pls' || (url && (url.includes('.m3u') || url.includes('.pls'))))) return null;
-      setMsg('Mendeteksi playlist...');
-      const txt = await fetchTextWithFallback(url);
-      if (!txt) return null;
-      if (ext === 'pls' || txt.toLowerCase().includes('[playlist]')) {
-        return parsePLS(txt) || null;
-      } else {
-        return parseM3U(txt, url) || null;
-      }
-    }
-
-    function buildProxyUrl(u){
-      if (!PROXY_BASE) return u;
-      if (PROXY_BASE.endsWith('=')) return PROXY_BASE + encodeURIComponent(u);
-      if (PROXY_BASE.indexOf('?') === -1) {
-        return PROXY_BASE.replace(/\/$/, '') + '/?url=' + encodeURIComponent(u);
-      }
-      return PROXY_BASE + encodeURIComponent(u);
-    }
-
-    async function attemptGetCover(streamUrl){
-      try {
-        const origin = (new URL(streamUrl)).origin;
-        const sj = await fetchTextWithFallback(origin + '/status-json.xsl');
-        if (sj) {
-          const j = JSON.parse(sj);
-          const sources = j.icestats && j.icestats.source
-            ? (Array.isArray(j.icestats.source) ? j.icestats.source : [j.icestats.source])
-            : null;
-          if (sources && sources.length){
-            let s0 = sources.find(s => (s.listenurl && s.listenurl === streamUrl) || (s.file && streamUrl.includes(s.file))) || sources[0];
-            const image = s0 && (s0.image || (s0.server_name && s0.server_name.image)) ? (s0.image || s0.server_name.image) : null;
-            if (image) return image;
-          }
-        }
-        const html = await fetchTextWithFallback(origin);
-        if (html) {
-          const m = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
-                || html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i)
-                || html.match(/<link[^>]*rel=["']image_src["'][^>]*href=["']([^"']+)["']/i);
-          if (m) {
-            try { return (new URL(m[1], origin)).href; }
-            catch(e) { return m[1]; }
-          }
-        }
-      } catch(e){}
-      return null;
-    }
-
-    function cleanupResources(){
-      if (hlsInstance) {
-        try { hlsInstance.destroy(); } catch(e){ }
-        hlsInstance = null;
-      }
-      try { audio.pause(); } catch(e){}
-      try {
-        audio.removeAttribute('src');
-        audio.load();
-      } catch(e){}
-      currentFinalUrl = null;
-      releaseWakeLock(); // 🆕 pastikan lock dilepas saat stop total
-    }
-
-    function stopRadio(){
-      isStopped = true;
-      cleanupResources();
-      cover.style.display = 'none';
-      background.style.backgroundImage = '';
-      setMsg('Streaming dihentikan. Tekan PLAY untuk mulai ulang.');
-    }
-
-    async function initAndPlay(){
-      if (!window._RAW_STREAM) {
-        setMsg('❌ Tidak ada URL stream pada hash.');
-        return;
-      }
-      isStopped = false;
-      setMsg('Memproses URL...');
-      try {
-        let resolved = await tryResolvePlaylist(window._RAW_STREAM);
-        currentFinalUrl = resolved || window._RAW_STREAM;
-      } catch(e){
-        currentFinalUrl = window._RAW_STREAM;
-      }
-
-      attemptGetCover(currentFinalUrl).then(img=>{
-        if (img){
-          cover.src = img;
-          cover.style.display = 'block';
-          background.style.backgroundImage = `url("${img}")`;
-        } else {
-          cover.style.display = 'none';
-          background.style.backgroundImage = '';
-        }
-      });
-
-      const ext = extOf(currentFinalUrl || '');
-      if (ext === 'm3u8') {
-        if (window.Hls && Hls.isSupported()){
-          if (hlsInstance) { try{ hlsInstance.destroy(); } catch(e){} hlsInstance = null; }
-          hlsInstance = new Hls();
-          hlsInstance.loadSource(buildProxyUrl(currentFinalUrl));
-          hlsInstance.attachMedia(audio);
-          hlsInstance.on(Hls.Events.MANIFEST_PARSED, ()=>{
-            audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); }).catch(()=>{ setMsg('Untuk memutar, tekan PLAY'); });
-          });
-        } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-          audio.src = buildProxyUrl(currentFinalUrl);
-          audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); }).catch(()=> setMsg('Autoplay diblokir, tekan PLAY'));
-        } else {
-          setMsg('Browser tidak mendukung HLS.');
-        }
-      } else {
-        audio.src = buildProxyUrl(currentFinalUrl);
-        audio.load();
-        audio.play().then(()=>{
-          audio.muted = false;
-          setMsg('Sedang memutar...');
-          requestWakeLock();
-        }).catch(()=>{ setMsg('Untuk memutar, tekan PLAY'); });
-      }
-    }
-
-    function onAudioError(){ setMsg('❌ Gagal memutar stream.'); }
-    function onPlaying(){ setMsg('Sedang memutar...'); }
-
-    playBtn.addEventListener('click', async ()=>{
-      if (isStopped || !audio.src || !currentFinalUrl) {
-        await initAndPlay();
-      } else {
-        audio.play().then(()=>{ audio.muted = false; setMsg('Sedang memutar...'); requestWakeLock(); }).catch(()=>{ setMsg('Autoplay diblokir, tekan PLAY lagi'); });
+        await audio.play();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        drawVisualizer();
+      } catch (e) {
+        console.error('Gagal play:', e);
       }
     });
 
-    stopBtn.addEventListener('click', stopRadio);
-
-    window.addEventListener('load', ()=>{
-      if (window._RAW_STREAM) { initAndPlay().catch(()=>{}); }
-      else setMsg('Tambahkan stream di hash, contoh: <code>#https://example.com/stream.mp3</code>');
+    stopBtn.addEventListener('click', () => {
+      audio.pause();
+      audio.src = '';
+      stopVisualizer();
     });
 
-    // ⬇️ Tetap stop total saat benar-benar pindah tab
-    document.addEventListener('visibilitychange', ()=>{
-      if (document.visibilityState === 'hidden' && !document.hiddenByScreenOff) {
-        stopRadio();
+    // Responsif canvas
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = 200;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Autoload radio URL jika ada di hash
+    window.addEventListener('load', () => {
+      if (getRadioURL()) {
+        playBtn.click(); // User masih harus klik pertama agar audioCtx tidak diblokir
       }
     });
 
-    function stopPlaybackOnExit(){ cleanupResources(); }
-    window.addEventListener('beforeunload', stopPlaybackOnExit);
-    window.addEventListener('pagehide', stopPlaybackOnExit);
-    window.addEventListener('unload', stopPlaybackOnExit);
-
-  })();
+    // Gambar album art jika tersedia dari metadata (opsional)
+    audio.addEventListener('loadedmetadata', () => {
+      // Beberapa server shoutcast/icecast bisa kirim ICY metadata
+      // Tapi tidak semua support → fallback kosong
+      artwork.style.backgroundImage = 'url()';
+    });
   </script>
 </body>
 </html>
