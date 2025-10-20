@@ -203,12 +203,15 @@
     playBtn.addEventListener('click', () => {
       if (audio.src) {
         initAudioContext();
+        setStatus('Sedang Loading Radio...', '#ff0');
         audio.play().then(() => {
           audioContext.resume();
           drawVisualizer();
         }).catch(err => {
           setStatus('Gagal memutar atau Radio Sedang Offline', '#ff5555');
         });
+      } else {
+        setStatus('Silakan masukkan URL Radio terlebih dahulu.', '#ccc');
       }
     });
 
@@ -216,7 +219,7 @@
       audio.pause();
       audio.currentTime = 0;
       stopVisualizer();
-      setStatus('Radio Berhenti', '#aaa');
+      setStatus('Tekan tombol Play untuk memutar Radio', '#ccc');
     });
 
     modeToggle.addEventListener('click', () => {
@@ -239,26 +242,25 @@
         });
         albumArt.style.backgroundImage = '';
       } else {
-        setStatus('Silakan pilih atau masukkan URL radio.', '#ccc');
+        setStatus('Tekan tombol Play untuk memutar Radio', '#ccc');
       }
     }
 
     // Audio event listeners
     audio.addEventListener('waiting', () => setStatus('Sedang Loading Radio...', '#ff0'));
     audio.addEventListener('playing', () => setStatus('Sedang Memutar', '#0f0'));
-    audio.addEventListener('pause', () => setStatus('Radio Dijeda', '#aaa'));
-    audio.addEventListener('ended', () => setStatus('Radio Berhenti', '#aaa'));
+    audio.addEventListener('pause', () => setStatus('Tekan tombol Play untuk memutar Radio', '#ccc'));
+    audio.addEventListener('ended', () => setStatus('Tekan tombol Play untuk memutar Radio', '#ccc'));
     audio.addEventListener('error', () => setStatus('Gagal memutar atau Radio Sedang Offline', '#ff5555'));
 
     window.addEventListener('hashchange', loadStreamFromHash);
 
-    // Stop total saat berpindah tab
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         audio.pause();
         audio.currentTime = 0;
         stopVisualizer();
-        setStatus('Radio Berhenti', '#aaa');
+        setStatus('Tekan tombol Play untuk memutar Radio', '#ccc');
       }
     });
 
@@ -267,6 +269,8 @@
       audio.currentTime = 0;
     });
 
+    // Tampilkan status awal
+    setStatus('Tekan tombol Play untuk memutar Radio', '#ccc');
     loadStreamFromHash();
   </script>
 </body>
