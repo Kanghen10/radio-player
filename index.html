@@ -26,38 +26,41 @@
       margin-bottom: 20px;
       border-radius: 8px;
     }
-    #visualizer {
-      width: 100%;
-      height: 200px;
-    }
-    #statusText {
-      margin-top: 10px;
+    #status {
+      margin-bottom: 10px;
       font-size: 16px;
-      min-height: 24px;
-      text-align: center;
+      color: #ccc;
     }
     #controls {
       margin-top: 10px;
       display: flex;
       gap: 10px;
     }
-    button {
+    #playBtn {
+      background: blue;
       color: white;
-      border: none;
+      border: 1px solid #444;
       padding: 10px 20px;
       cursor: pointer;
       font-size: 16px;
-      border-radius: 4px;
-      transition: transform 0.15s ease;
     }
-    #playBtn {
-      background: #007bff; /* Biru */
+    #playBtn:hover {
+      background: #0040ff;
     }
     #stopBtn {
-      background: #dc3545; /* Merah */
+      background: red;
+      color: white;
+      border: 1px solid #444;
+      padding: 10px 20px;
+      cursor: pointer;
+      font-size: 16px;
     }
-    button:hover {
-      transform: scale(1.05);
+    #stopBtn:hover {
+      background: #cc0000;
+    }
+    #visualizer {
+      width: 100%;
+      height: 200px;
     }
     #modeToggle {
       position: absolute;
@@ -65,17 +68,16 @@
       right: 10px;
       background: rgba(0,0,0,0.5);
       font-size: 14px;
-      padding: 6px 10px;
-      border-radius: 4px;
+      color: white;
     }
   </style>
 </head>
 <body>
   <div id="albumArt"></div>
 
-  <canvas id="visualizer"></canvas>
+  <div id="status">Tekan tombol Play untuk memutar Radio</div>
 
-  <div id="statusText"></div>
+  <canvas id="visualizer"></canvas>
 
   <div id="controls">
     <button id="playBtn">PLAY</button>
@@ -94,7 +96,7 @@
     const canvas = document.getElementById('visualizer');
     const ctx = canvas.getContext('2d');
     const modeToggle = document.getElementById('modeToggle');
-    const statusText = document.getElementById('statusText');
+    const statusText = document.getElementById('status');
 
     const modes = ['bar', 'wave', 'circle'];
     let modeIndex = 0;
@@ -102,11 +104,6 @@
     let hue = 0;
 
     let audioContext, source, analyser, dataArray, bufferLength, animationId;
-
-    function setStatus(text, color = '#fff') {
-      statusText.textContent = text;
-      statusText.style.color = color;
-    }
 
     function resizeCanvas() {
       canvas.width = window.innerWidth;
@@ -131,8 +128,6 @@
     function drawVisualizer() {
       animationId = requestAnimationFrame(drawVisualizer);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      if (!analyser) return;
 
       if (mode === 'bar') {
         analyser.getByteFrequencyData(dataArray);
@@ -166,6 +161,7 @@
         const centerX = canvas.width / 2;
         const centerY = canvas.height / 2;
 
+        // Buat path luar untuk garis plasma
         ctx.beginPath();
         for (let i = 0; i < bufferLength; i++) {
           const angle = (i / bufferLength) * 2 * Math.PI;
@@ -179,16 +175,15 @@
         ctx.closePath();
 
         hue = (hue + 2) % 360;
-        ctx.strokeStyle = `hsl(${hue}, 100%, 60%)`;
+        const color = `hsl(${hue}, 100%, 60%)`;
+        ctx.strokeStyle = color;
         ctx.lineWidth = 3;
         ctx.shadowBlur = 25;
-        ctx.shadowColor = `hsl(${hue}, 100%, 60%)`;
+        ctx.shadowColor = color;
         ctx.stroke();
 
-        const gradient = ctx.createRadialGradient(centerX, centerY, radius * 0.2, centerX, centerY, radius + 30);
-        gradient.addColorStop(0, `hsla(${hue}, 100%, 60%, 0.6)`);
-        gradient.addColorStop(1, `hsla(${(hue+60)%360}, 100%, 50%, 0.1)`);
-        ctx.fillStyle = gradient;
+        // Fill bagian dalam seperti plasma berdenyut
+        ctx.fillStyle = `hsla(${hue}, 100%, 60%, 0.2)`;
         ctx.fill();
 
         ctx.shadowBlur = 0;
@@ -203,15 +198,13 @@
     playBtn.addEventListener('click', () => {
       if (audio.src) {
         initAudioContext();
-        setStatus('Sedang Loading Radio...', '#ff0');
         audio.play().then(() => {
           audioContext.resume();
           drawVisualizer();
-        }).catch(err => {
-          setStatus('Gagal memutar atau Radio Sedang Offline', '#ff5555');
+          statusText.textContent = "Sedang memutar...";
+        }).catch(() => {
+          statusText.textContent = "Tekan tombol Play untuk memutar Radio";
         });
-      } else {
-        setStatus('Silakan masukkan URL Radio terlebih dahulu.', '#ccc');
       }
     });
 
@@ -219,7 +212,7 @@
       audio.pause();
       audio.currentTime = 0;
       stopVisualizer();
-      setStatus('Tekan tombol Play untuk memutar Radio', '#ccc');
+      statusText.textContent = "Tekan tombol Play untuk memutar Radio";
     });
 
     modeToggle.addEventListener('click', () => {
@@ -231,36 +224,28 @@
     function loadStreamFromHash() {
       const streamUrl = decodeURIComponent(window.location.hash.substring(1));
       if (streamUrl) {
-        setStatus('Sedang Loading Radio...', '#ff0');
         audio.src = streamUrl;
         audio.play().then(() => {
           initAudioContext();
           drawVisualizer();
-        }).catch(err => {
-          setStatus('Gagal memutar atau Radio Sedang Offline', '#ff5555');
-          console.warn('Autoplay blocked:', err);
+          statusText.textContent = "Sedang memutar...";
+        }).catch(() => {
+          // ⬇️ Kalau autoplay ditolak, status langsung ke teks normal tanpa error
+          statusText.textContent = "Tekan tombol Play untuk memutar Radio";
         });
         albumArt.style.backgroundImage = '';
       } else {
-        setStatus('Tekan tombol Play untuk memutar Radio', '#ccc');
+        statusText.textContent = "Tekan tombol Play untuk memutar Radio";
       }
     }
-
-    // Audio event listeners
-    audio.addEventListener('waiting', () => setStatus('Sedang Loading Radio...', '#ff0'));
-    audio.addEventListener('playing', () => setStatus('Sedang Memutar', '#0f0'));
-    audio.addEventListener('pause', () => setStatus('Tekan tombol Play untuk memutar Radio', '#ccc'));
-    audio.addEventListener('ended', () => setStatus('Tekan tombol Play untuk memutar Radio', '#ccc'));
-    audio.addEventListener('error', () => setStatus('Gagal memutar atau Radio Sedang Offline', '#ff5555'));
 
     window.addEventListener('hashchange', loadStreamFromHash);
 
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         audio.pause();
-        audio.currentTime = 0;
         stopVisualizer();
-        setStatus('Tekan tombol Play untuk memutar Radio', '#ccc');
+        statusText.textContent = "Tekan tombol Play untuk memutar Radio";
       }
     });
 
@@ -269,8 +254,6 @@
       audio.currentTime = 0;
     });
 
-    // Tampilkan status awal
-    setStatus('Tekan tombol Play untuk memutar Radio', '#ccc');
     loadStreamFromHash();
   </script>
 </body>
